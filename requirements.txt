@@ -1,0 +1,26 @@
+# ModelHub CLI Requirements
+# Core dependencies for the ncurses-based model management application
+# Requires Python 3.10 or above
+
+# Configuration management
+PyYAML>=6.0
+
+# Built-in libraries (Python 3.10+):
+# - sqlite3 (database operations)
+# - curses (TUI interface)  
+# - pathlib (modern path handling)
+# - hashlib (file hashing)
+# - shutil (file operations)
+# - json (config fallback)
+# - dataclasses (data structures)
+# - typing (type hints)
+
+# Development and testing (optional)
+# pytest>=7.0
+# pytest-cov>=4.0
+
+# Note: This application is designed to use mostly built-in Python libraries
+# to ensure compatibility across different Linux distributions without
+# requiring extensive dependency management.
+
+# Python version requirement: >=3.10
