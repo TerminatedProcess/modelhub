@@ -42,9 +42,9 @@ class ModelHubTUI:
         self.column_positions = {
             'filename': (0, 45),
             'primary_type': (48, 60),
-            'sub_type': (63, 78),
-            'triggers': (81, 116),
-            'classification_method': (119, 141)
+            'sub_type': (63, 83),
+            'triggers': (86, 121),
+            'classification_method': (124, 146)
         }
         
         # UI state
@@ -255,14 +255,14 @@ class ModelHubTUI:
         self.draw_filter_fields()
         
         # Column headers with separators
-        headers = f"{'Model Name':<45} │ {'Type':<12} │ {'Subtype':<15} │ {'Triggers':<35} │ {'Method':<22}"
+        headers = f"{'Model Name':<45} │ {'Type':<12} │ {'Subtype':<20} │ {'Triggers':<35} │ {'Method':<22}"
         try:
             self.stdscr.addstr(4, 0, headers[:self.width-1], curses.A_BOLD)
         except curses.error:
             pass
             
         # Header separator line
-        separator_line = "─" * min(141, self.width-1)
+        separator_line = "─" * min(146, self.width-1)
         try:
             self.stdscr.addstr(5, 0, separator_line)
         except curses.error:
@@ -289,7 +289,7 @@ class ModelHubTUI:
                 # Classification method, shortened for display
                 method = model.classification_method[:22] if model.classification_method else ""
                 
-                line = f"{model.filename[:45]:<45} │ {model.primary_type[:12]:<12} │ {model.sub_type[:15]:<15} │ {triggers:<35} │ {method:<22}"
+                line = f"{model.filename[:45]:<45} │ {model.primary_type[:12]:<12} │ {model.sub_type[:20]:<20} │ {triggers:<35} │ {method:<22}"
                 
                 attr = curses.color_pair(2) if model_index == self.selected_row else 0
                 self.stdscr.addstr(y, 0, line[:self.width-1], attr)

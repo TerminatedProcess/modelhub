@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-ModelHub Classification System
-Comprehensive AI model classification with multi-layer analysis
+Enhanced Model Hub Classifier - Comprehensive AI model classification system
+Provides accurate model type detection through multi-layer analysis
+Based on proven legacy classification engine with modern improvements
 """
 
 import json
@@ -19,7 +20,7 @@ from datetime import datetime
 
 @dataclass
 class ClassificationResult:
-    """Model classification result"""
+    """Model classification result - compatible with existing interface"""
     primary_type: str
     sub_type: str
     confidence: float
@@ -28,6 +29,12 @@ class ClassificationResult:
     triggers: Optional[List[str]] = None
     base_model: Optional[str] = None
     tensor_count: Optional[int] = None
+    
+    # Additional scoring details for advanced analysis
+    filename_score: float = 0.0
+    size_score: float = 0.0
+    metadata_score: float = 0.0
+    tensor_score: float = 0.0
 
 class SafeTensorsExtractor:
     """Extract metadata from SafeTensors files"""
@@ -62,53 +69,51 @@ class SafeTensorsExtractor:
                 return {'error': 'LFS pointer file - not downloaded'}
             
             with open(file_path, 'rb') as f:
+                # Read header length (first 8 bytes)
                 header_size_bytes = f.read(8)
                 if len(header_size_bytes) < 8:
                     return {'error': 'File too small to be valid SafeTensors'}
                 
                 header_size = struct.unpack('<Q', header_size_bytes)[0]
-                
                 if header_size > 100_000_000:  # 100MB header limit
-                    return {'error': 'Header size too large'}
+                    return {'error': 'Header too large, likely corrupt file'}
                 
-                header_data = f.read(header_size)
-                if len(header_data) < header_size:
-                    return {'error': 'Incomplete header data'}
+                # Read header JSON
+                header_bytes = f.read(header_size)
+                if len(header_bytes) < header_size:
+                    return {'error': 'Incomplete header read'}
                 
-                header = json.loads(header_data.decode('utf-8'))
+                header_json = json.loads(header_bytes.decode('utf-8'))
                 
-                metadata = header.get('__metadata__', {})
-                tensors = {k: v for k, v in header.items() if k != '__metadata__'}
+                # Extract tensor information
+                tensors = {}
+                metadata = {}
                 
-                total_size = 0
-                for tensor_info in tensors.values():
-                    if 'data_offsets' in tensor_info and len(tensor_info['data_offsets']) >= 2:
-                        total_size += tensor_info['data_offsets'][1] - tensor_info['data_offsets'][0]
+                for key, value in header_json.items():
+                    if key == '__metadata__':
+                        metadata = value
+                    elif isinstance(value, dict) and 'shape' in value:
+                        tensors[key] = value
                 
                 return {
-                    'metadata': metadata,
                     'tensors': tensors,
+                    'metadata': metadata,
                     'tensor_count': len(tensors),
-                    'tensor_names': list(tensors.keys()),
-                    'total_tensor_size': total_size,
-                    'header_size': header_size
+                    'tensor_names': list(tensors.keys())
                 }
-        except json.JSONDecodeError:
-            return {'error': 'Invalid JSON in header'}
+                
         except Exception as e:
-            return {'error': f'Failed to extract metadata: {str(e)}'}
+            return {'error': f'SafeTensors extraction failed: {e}'}
 
 class GGUFExtractor:
     """Extract metadata from GGUF files"""
     
     @staticmethod
     def extract_metadata(file_path: Path) -> Dict:
-        """Extract comprehensive metadata from GGUF file"""
+        """Extract basic metadata from GGUF file"""
         try:
-            if SafeTensorsExtractor.is_lfs_pointer_file(file_path):
-                return {'error': 'LFS pointer file - not downloaded'}
-            
             with open(file_path, 'rb') as f:
+                # Read GGUF header
                 magic = f.read(4)
                 if magic != b'GGUF':
                     return {'error': 'Not a valid GGUF file'}
@@ -117,32 +122,104 @@ class GGUFExtractor:
                 tensor_count = struct.unpack('<Q', f.read(8))[0]
                 metadata_kv_count = struct.unpack('<Q', f.read(8))[0]
                 
-                if tensor_count > 10000 or metadata_kv_count > 1000:
-                    return {'error': 'Suspicious tensor or metadata counts'}
-                
-                metadata = {
+                return {
                     'version': version,
                     'tensor_count': tensor_count,
-                    'metadata_count': metadata_kv_count
+                    'metadata_count': metadata_kv_count,
+                    'format': 'gguf'
                 }
                 
-                file_size = file_path.stat().st_size
-                metadata['file_size'] = file_size
-                
-                if file_size > 10_000_000_000:  # > 10GB
-                    metadata['estimated_type'] = 'large_llm'
-                elif file_size > 1_000_000_000:  # > 1GB
-                    metadata['estimated_type'] = 'medium_llm'
-                else:
-                    metadata['estimated_type'] = 'small_llm'
-                
-                return metadata
-                
         except Exception as e:
-            return {'error': f'Failed to extract GGUF metadata: {str(e)}'}
+            return {'error': f'GGUF extraction failed: {e}'}
+
+class TensorAnalyzer:
+    """Analyze tensor structures to determine model architecture"""
+    
+    def __init__(self):
+        # Define tensor patterns for different model types
+        self.tensor_patterns = {
+            'lora': [
+                r'.*\.lora_up\..*',
+                r'.*\.lora_down\..*', 
+                r'.*\.alpha$',
+                r'.*lora_A\..*',
+                r'.*lora_B\..*'
+            ],
+            'flux': [
+                'double_blocks',
+                'single_blocks', 
+                'img_attn',
+                'txt_attn',
+                'guidance_in'
+            ],
+            'controlnet': [
+                'control_model',
+                'input_blocks',
+                'middle_block',
+                'output_blocks',
+                'zero_convs'
+            ],
+            'vae': [
+                'encoder.down',
+                'decoder.up',
+                'quant_conv',
+                'post_quant_conv'
+            ],
+            'video_vae': [
+                r'encoder\.downsamples\..*\.residual\..*',
+                r'decoder\.upsamples\..*\.residual\..*',
+                'temporal_down',
+                'temporal_up'
+            ],
+            'clip': [
+                'text_model.encoder',
+                'text_projection',
+                'visual.transformer'
+            ],
+            'unet': [
+                'time_embed',
+                'input_blocks',
+                'middle_block', 
+                'output_blocks'
+            ]
+        }
+    
+    def analyze_tensors(self, tensor_names: List[str]) -> Dict[str, float]:
+        """Analyze tensor names against known patterns"""
+        scores = {}
+        
+        for model_type, patterns in self.tensor_patterns.items():
+            matches = 0
+            total_patterns = len(patterns)
+            
+            for pattern in patterns:
+                if any(re.search(pattern, name, re.IGNORECASE) for name in tensor_names):
+                    matches += 1
+            
+            scores[model_type] = matches / total_patterns if total_patterns > 0 else 0.0
+        
+        return scores
+    
+    def get_architecture_hints(self, tensor_names: List[str], metadata: Dict) -> str:
+        """Get architecture hints from tensor analysis"""
+        tensor_str = ' '.join(tensor_names).lower()
+        
+        # Check for specific architectures in order of specificity
+        if 'flux' in tensor_str and ('gguf' in tensor_str or 'quantized' in str(metadata)):
+            return 'flux_quantized'
+        elif any(flux_pattern in tensor_str for flux_pattern in ['double_blocks', 'single_blocks', 'img_attn']):
+            return 'flux'
+        elif 'downsamples' in tensor_str and 'residual' in tensor_str:
+            return 'video_vae'
+        elif 'time_embed' in tensor_str and 'middle_block' in tensor_str:
+            return 'diffusion'
+        elif 'lora' in tensor_str:
+            return 'lora'
+        else:
+            return 'unknown'
 
 class CivitAILookup:
-    """CivitAI API integration for model lookup by hash"""
+    """CivitAI API integration for external model lookup"""
     
     def __init__(self, enable_api: bool = True):
         self.enable_api = enable_api
@@ -155,18 +232,17 @@ class CivitAILookup:
         self.last_request_time = 0
     
     def lookup_by_hash(self, file_hash: str) -> Dict:
-        """Lookup model information by SHA-256 hash"""
+        """Look up model by SHA-256 hash"""
         if not self.enable_api:
             return {'found': False, 'source': 'api_disabled'}
         
         try:
-            current_time = time.time()
-            time_since_last = current_time - self.last_request_time
-            if time_since_last < self.rate_limit_delay:
-                time.sleep(self.rate_limit_delay - time_since_last)
+            # Rate limiting
+            elapsed = time.time() - self.last_request_time
+            if elapsed < self.rate_limit_delay:
+                time.sleep(self.rate_limit_delay - elapsed)
             
             url = f"{self.base_url}/model-versions/by-hash/{file_hash}"
-            
             response = self.session.get(url, timeout=10)
             self.last_request_time = time.time()
             
@@ -174,108 +250,56 @@ class CivitAILookup:
                 data = response.json()
                 return self.parse_civitai_response(data)
             elif response.status_code == 404:
-                return {'found': False, 'source': 'not_found'}
+                return {'found': False, 'source': 'civitai_not_found'}
             else:
-                return {'found': False, 'source': 'api_error'}
+                return {'found': False, 'source': f'civitai_error_{response.status_code}'}
                 
-        except requests.exceptions.Timeout:
-            return {'found': False, 'source': 'timeout'}
-        except requests.exceptions.RequestException:
-            return {'found': False, 'source': 'network_error'}
-        except Exception:
-            return {'found': False, 'source': 'unknown_error'}
+        except Exception as e:
+            return {'found': False, 'source': f'civitai_exception_{type(e).__name__}'}
     
     def parse_civitai_response(self, data: Dict) -> Dict:
-        """Parse CivitAI API response to extract model classification"""
+        """Parse CivitAI API response into our format"""
         try:
             model_info = data.get('model', {})
             version_info = data
             
-            model_type = model_info.get('type', '').lower()
+            # Extract basic info
+            name = model_info.get('name', 'Unknown')
+            model_type = model_info.get('type', 'unknown').lower()
             
+            # Map CivitAI types to our types
             type_mapping = {
                 'checkpoint': 'checkpoint',
+                'textualinversion': 'embedding',
                 'lora': 'lora',
                 'lycoris': 'lora',
-                'textualinversion': 'embedding',
                 'hypernetwork': 'hypernetwork',
-                'aestheticgradient': 'embedding',
                 'controlnet': 'controlnet',
                 'vae': 'vae',
-                'upscaler': 'upscaler'
+                'poses': 'pose',
+                'wildcards': 'wildcard',
+                'workflows': 'workflow',
+                'other': 'unknown'
             }
             
             primary_type = type_mapping.get(model_type, 'unknown')
             base_model = self.extract_base_model(model_info, version_info)
-            
-            # Extract trigger words from CivitAI response
-            triggers = self.extract_civitai_triggers(model_info, version_info)
+            triggers = self.extract_civitai_triggers(version_info)
             
             return {
                 'found': True,
-                'source': 'civitai',
+                'source': 'civitai_api',
+                'name': name,
                 'primary_type': primary_type,
                 'base_model': base_model,
-                'name': model_info.get('name', ''),
                 'triggers': triggers,
-                'confidence': 0.99,
-                'raw_data': data
+                'confidence': 0.95,  # High confidence for CivitAI data
+                'civitai_id': model_info.get('id'),
+                'version_id': version_info.get('id')
             }
             
-        except Exception:
-            return {'found': False, 'source': 'parse_error'}
-    
-    def extract_civitai_triggers(self, model_info: Dict, version_info: Dict) -> Optional[List[str]]:
-        """Extract trigger words from CivitAI API response"""
-        triggers = []
-        
-        try:
-            # Check for trigger words in version info
-            if 'trainedWords' in version_info and version_info['trainedWords']:
-                triggers.extend(version_info['trainedWords'])
-            
-            # Check for trigger words in model info
-            if 'trainedWords' in model_info and model_info['trainedWords']:
-                triggers.extend(model_info['trainedWords'])
-            
-            # Check in version description for trigger patterns
-            description = version_info.get('description', '')
-            if description:
-                # Look for common trigger word patterns in description
-                import re
-                trigger_patterns = [
-                    r'trigger\s*word[s]?:\s*([^<\n]+)',
-                    r'activation\s*word[s]?:\s*([^<\n]+)',
-                    r'keyword[s]?:\s*([^<\n]+)',
-                    r'use\s*["\']([^"\']+)["\']',
-                ]
-                
-                for pattern in trigger_patterns:
-                    matches = re.findall(pattern, description, re.IGNORECASE)
-                    for match in matches:
-                        # Split on common separators
-                        words = re.split(r'[,;|]', match.strip())
-                        for word in words:
-                            clean_word = word.strip().strip('"\'').strip()
-                            if clean_word and len(clean_word) > 1:
-                                triggers.append(clean_word)
-            
-            # Clean and deduplicate
-            if triggers:
-                seen = set()
-                cleaned = []
-                for trigger in triggers:
-                    trigger_clean = trigger.strip().upper()
-                    if trigger_clean and trigger_clean not in seen and len(trigger_clean) > 1:
-                        seen.add(trigger_clean)
-                        cleaned.append(trigger_clean)
-                
-                return cleaned[:5] if cleaned else None  # Limit to 5 triggers
-            
-        except Exception:
-            pass
-        
-        return None
+        except Exception as e:
+            return {'found': False, 'source': f'civitai_parse_error_{type(e).__name__}'}
     
     def extract_base_model(self, model_info: Dict, version_info: Dict) -> str:
         """Extract base model from CivitAI data"""
@@ -301,9 +325,20 @@ class CivitAILookup:
             return 'sd3'
         
         return base_model or 'unknown'
+    
+    def extract_civitai_triggers(self, version_info: Dict) -> List[str]:
+        """Extract trigger words from CivitAI version info"""
+        triggers = []
+        
+        # Check trainedWords field
+        trained_words = version_info.get('trainedWords', [])
+        if isinstance(trained_words, list):
+            triggers.extend(trained_words)
+        
+        return triggers
 
 class ModelClassifier:
-    """Comprehensive model classification system"""
+    """Enhanced model classification system with multi-layer analysis"""
     
     def __init__(self, config: Dict, database=None):
         self.config = config
@@ -311,31 +346,31 @@ class ModelClassifier:
         self.confidence_threshold = self.class_config.get('confidence_threshold', 0.5)
         self.database = database
         
-        # Initialize external API lookups
+        # Initialize components
         enable_api = self.class_config.get('enable_external_apis', True)
         self.civitai = CivitAILookup(enable_api=enable_api)
+        self.tensor_analyzer = TensorAnalyzer()
         
-        # Load classification rules from database if available, fallback to config
+        # Load classification rules
         self.load_classification_rules()
+        
+        # Scoring weights for multi-layer analysis
+        self.weights = {
+            'filename': 0.2,   # Reduced - filenames can be misleading
+            'size': 0.2,       # File size is a good indicator
+            'tensor': 0.5,     # Highest - tensor analysis is most reliable
+            'metadata': 0.1    # SafeTensors metadata when available
+        }
     
     def load_classification_rules(self):
         """Load classification rules from database or config fallback"""
         if self.database:
             try:
-                # Load from database
                 self.size_rules = self.database.get_size_rules()
                 self.sub_type_rules = self.database.get_sub_type_rules()
                 self.architecture_patterns = self.database.get_architecture_patterns()
                 self.external_apis = self.database.get_external_apis()
                 self.model_types = self.database.get_model_types()
-                
-                # Convert architecture patterns to dict for easier lookup
-                self.architecture_patterns_dict = {}
-                for arch, pattern, confidence in self.architecture_patterns:
-                    if arch not in self.architecture_patterns_dict:
-                        self.architecture_patterns_dict[arch] = []
-                    self.architecture_patterns_dict[arch].append((pattern, confidence))
-                
             except Exception as e:
                 print(f"Warning: Could not load classification rules from database: {e}")
                 self.load_fallback_rules()
@@ -356,14 +391,14 @@ class ModelClassifier:
             'upscaler': {'min': 1_000_000, 'max': 500_000_000},
             'embedding': {'min': 1_000, 'max': 50_000_000},
             'video_model': {'min': 100_000_000, 'max': 100_000_000_000},
+            'ip_adapter': {'min': 10_000_000, 'max': 2_000_000_000}
         })
         
-        # Default sub-type and architecture patterns
         self.sub_type_rules = []
         self.architecture_patterns = []
         self.external_apis = [('civitai', True, 1, 1.0, 10)]
         self.model_types = [('checkpoint', 'Checkpoint'), ('lora', 'LoRA'), ('vae', 'VAE')]
-    
+
     def classify_model(self, file_path: Path, file_hash: str = None, quiet: bool = False) -> ClassificationResult:
         """Classify a model using multi-layer analysis"""
         
@@ -394,16 +429,16 @@ class ModelClassifier:
         
         # STEP 2: Check manual overrides
         manual_overrides = self.class_config.get('manual_overrides', {})
-        if file_path.name in manual_overrides:
-            override = manual_overrides[file_path.name]
-            if '/' in override:
-                primary_type, sub_type = override.split('/', 1)
-                return ClassificationResult(
-                    primary_type=primary_type,
-                    sub_type=sub_type,
-                    confidence=1.0,
-                    method="manual_override"
-                )
+        filename_key = file_path.name.lower()
+        if filename_key in manual_overrides:
+            override = manual_overrides[filename_key]
+            return ClassificationResult(
+                primary_type=override.get('primary_type', 'unknown'),
+                sub_type=override.get('sub_type', 'unknown'),
+                confidence=1.0,
+                method="manual_override",
+                triggers=override.get('triggers', [])
+            )
         
         # STEP 3: CivitAI API lookup
         if not quiet:
@@ -424,7 +459,7 @@ class ModelClassifier:
                 confidence=civitai_result['confidence'],
                 method="civitai_api",
                 base_model=base_model,
-                triggers=civitai_result.get('triggers')
+                triggers=civitai_result.get('triggers', [])
             )
         
         # STEP 4: SafeTensors metadata analysis
@@ -432,325 +467,343 @@ class ModelClassifier:
             return self.classify_safetensors(file_path, file_hash, quiet)
         
         # STEP 5: File size analysis fallback
-        return self.classify_by_size(file_path, quiet)
-    
-    def classify_gguf(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
-        """Classify GGUF files"""
-        gguf_metadata = GGUFExtractor.extract_metadata(file_path)
-        
-        sub_type = self.determine_gguf_subtype(file_path.name, file_path.stat().st_size)
-        
-        return ClassificationResult(
-            primary_type="gguf",
-            sub_type=sub_type,
-            confidence=0.95,
-            method="gguf_classification",
-            tensor_count=gguf_metadata.get('tensor_count', 0)
-        )
+        return self.classify_by_size(file_path, file_hash, quiet)
     
     def classify_safetensors(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
         """Classify SafeTensors files using metadata and tensor analysis"""
-        st_metadata = SafeTensorsExtractor.extract_metadata(file_path)
+        if not quiet:
+            print("    Analyzing SafeTensors metadata...")
         
-        if 'error' in st_metadata:
-            return self.classify_by_size(file_path, quiet)
+        metadata = SafeTensorsExtractor.extract_metadata(file_path)
+        if 'error' in metadata:
+            if not quiet:
+                print(f"    SafeTensors error: {metadata['error']}")
+            return self.classify_by_size(file_path, file_hash, quiet)
+        
+        tensor_names = metadata.get('tensor_names', [])
+        tensor_count = metadata.get('tensor_count', 0)
+        st_metadata = metadata.get('metadata', {})
+        
+        # Analyze tensor patterns
+        tensor_scores = self.tensor_analyzer.analyze_tensors(tensor_names)
+        architecture = self.tensor_analyzer.get_architecture_hints(tensor_names, st_metadata)
+        
+        # Calculate individual scores
+        filename_score = self.calculate_filename_score(file_path.name)
+        size_score = self.calculate_size_score(file_path.stat().st_size)
+        tensor_score = max(tensor_scores.values()) if tensor_scores else 0.0
+        metadata_score = self.calculate_metadata_score(st_metadata)
+        
+        # Determine primary type based on highest tensor score
+        if tensor_scores:
+            primary_type = max(tensor_scores.items(), key=lambda x: x[1])[0]
+            confidence = tensor_scores[primary_type]
+        else:
+            # Fallback to size-based classification
+            primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size)
+        
+        # Calculate weighted confidence
+        weighted_confidence = (
+            filename_score * self.weights['filename'] +
+            size_score * self.weights['size'] +
+            tensor_score * self.weights['tensor'] +
+            metadata_score * self.weights['metadata']
+        )
+        
+        # Use the higher of tensor-based or weighted confidence
+        final_confidence = max(confidence, weighted_confidence)
         
         # Extract triggers for LoRA models
-        triggers = None
-        metadata = st_metadata.get('metadata', {})
-        if metadata:
-            triggers = self.extract_triggers_from_metadata(metadata)
+        triggers = []
+        if primary_type == 'lora':
+            triggers = self.extract_triggers_from_safetensors(st_metadata)
         
-        # Analyze tensor structure
-        tensor_names = st_metadata.get('tensor_names', [])
-        architecture = self.analyze_tensor_architecture(tensor_names)
+        # Determine sub-type
+        base_model = self.extract_base_model_from_metadata(st_metadata)
+        sub_type = self.determine_sub_type(primary_type, base_model, file_path.name)
         
-        # Determine primary type from metadata or tensor analysis
-        primary_type = self.determine_primary_type_from_metadata(metadata, architecture, file_path.stat().st_size)
-        sub_type = self.determine_sub_type(primary_type, None, file_path.name)
+        if not quiet:
+            print(f"    SafeTensors: {primary_type} (confidence: {final_confidence:.2f})")
+            if triggers:
+                print(f"    Triggers: {', '.join(triggers)}")
         
-        confidence = 0.9 if primary_type != 'unknown' else 0.3
+        return ClassificationResult(
+            primary_type=primary_type,
+            sub_type=sub_type,
+            confidence=final_confidence,
+            method="safetensors_analysis",
+            architecture=architecture,
+            triggers=triggers,
+            tensor_count=tensor_count,
+            filename_score=filename_score,
+            size_score=size_score,
+            metadata_score=metadata_score,
+            tensor_score=tensor_score
+        )
+    
+    def classify_gguf(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
+        """Classify GGUF files"""
+        if not quiet:
+            print("    Analyzing GGUF file...")
+        
+        metadata = GGUFExtractor.extract_metadata(file_path)
+        if 'error' in metadata:
+            return self.classify_by_size(file_path, file_hash, quiet)
+        
+        # GGUF files are typically quantized language models or diffusion models
+        file_size = file_path.stat().st_size
+        tensor_count = metadata.get('tensor_count', 0)
+        
+        # Determine type based on size and tensor count
+        if file_size > 10_000_000_000:  # > 10GB
+            primary_type = 'checkpoint'
+            sub_type = 'gguf_checkpoint'
+        elif file_size > 1_000_000_000:  # > 1GB
+            primary_type = 'gguf'
+            sub_type = 'quantized_model'
+        else:
+            primary_type = 'gguf'
+            sub_type = 'small_model'
+        
+        confidence = 0.9  # High confidence for GGUF detection
         
         return ClassificationResult(
             primary_type=primary_type,
             sub_type=sub_type,
             confidence=confidence,
-            method="safetensors_analysis",
-            architecture=architecture,
-            triggers=triggers,
-            tensor_count=st_metadata.get('tensor_count', 0)
+            method="gguf_classification",
+            tensor_count=tensor_count
         )
     
-    def classify_by_size(self, file_path: Path, quiet: bool = False) -> ClassificationResult:
-        """Fallback classification using file size"""
+    def classify_by_size(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
+        """Classify model by file size as fallback"""
         file_size = file_path.stat().st_size
+        primary_type, confidence = self.classify_by_size_only(file_size)
         
-        best_match = None
-        best_confidence = 0.0
+        # Calculate filename score for additional confidence
+        filename_score = self.calculate_filename_score(file_path.name)
         
-        for model_type, size_range in self.size_rules.items():
-            if size_range['min'] <= file_size <= size_range['max']:
-                range_size = size_range['max'] - size_range['min']
-                distance_from_min = file_size - size_range['min']
-                confidence = 0.3 + 0.2 * (distance_from_min / range_size)
+        # Combine size and filename scores
+        combined_confidence = (confidence * 0.7) + (filename_score * 0.3)
+        
+        sub_type = self.determine_sub_type(primary_type, 'unknown', file_path.name)
+        
+        if not quiet:
+            print(f"    Size-based: {primary_type} (confidence: {combined_confidence:.2f})")
+        
+        return ClassificationResult(
+            primary_type=primary_type,
+            sub_type=sub_type,
+            confidence=combined_confidence,
+            method="size_analysis",
+            size_score=confidence,
+            filename_score=filename_score
+        )
+    
+    def classify_by_size_only(self, file_size: int) -> Tuple[str, float]:
+        """Get type and confidence based on file size only"""
+        best_match = 'unknown'
+        best_confidence = 0.3
+        
+        for model_type, rules in self.size_rules.items():
+            min_size = rules.get('min', 0)
+            max_size = rules.get('max', float('inf'))
+            
+            if min_size <= file_size <= max_size:
+                # Calculate confidence based on how well size fits
+                size_range = max_size - min_size
+                if size_range > 0:
+                    distance_from_min = file_size - min_size
+                    confidence = 0.5 + (0.4 * (1 - distance_from_min / size_range))
+                else:
+                    confidence = 0.9
                 
                 if confidence > best_confidence:
                     best_match = model_type
                     best_confidence = confidence
         
-        if best_match:
-            sub_type = self.determine_sub_type(best_match, None, file_path.name)
-            return ClassificationResult(
-                primary_type=best_match,
-                sub_type=sub_type,
-                confidence=best_confidence,
-                method="size_analysis"
-            )
-        
-        return ClassificationResult(
-            primary_type="unknown",
-            sub_type="unknown",
-            confidence=0.0,
-            method="size_analysis"
-        )
+        return best_match, best_confidence
     
-    def determine_primary_type_from_metadata(self, metadata: Dict, architecture: str, file_size: int) -> str:
-        """Determine primary type from SafeTensors metadata"""
+    def calculate_filename_score(self, filename: str) -> float:
+        """Calculate confidence score based on filename patterns"""
+        filename_lower = filename.lower()
+        
+        # Strong indicators
+        if 'lora' in filename_lower:
+            return 0.9
+        elif 'controlnet' in filename_lower or 'control_' in filename_lower:
+            return 0.9
+        elif 'vae' in filename_lower:
+            return 0.9
+        elif 'ip-adapter' in filename_lower or 'ip_adapter' in filename_lower:
+            return 0.9
+        elif 'embedding' in filename_lower or 'textual_inversion' in filename_lower:
+            return 0.9
+        elif 'checkpoint' in filename_lower or 'ckpt' in filename_lower:
+            return 0.8
+        
+        # Model architecture indicators
+        elif any(arch in filename_lower for arch in ['flux', 'sdxl', 'sd15', 'sd3']):
+            return 0.7
+        
+        # Weak indicators
+        elif filename_lower.endswith('.safetensors'):
+            return 0.5
+        
+        return 0.3
+    
+    def calculate_size_score(self, file_size: int) -> float:
+        """Calculate confidence score based on file size"""
+        _, confidence = self.classify_by_size_only(file_size)
+        return confidence
+    
+    def calculate_metadata_score(self, metadata: Dict) -> float:
+        """Calculate confidence score based on metadata content"""
         if not metadata:
-            if architecture == 'lora':
-                return 'lora'
-            elif architecture in ['vae', 'video_vae']:
-                return 'vae'
-            elif architecture in ['flux', 'diffusion']:
-                return 'checkpoint'
-            return 'unknown'
+            return 0.0
         
-        # Check metadata fields for type indicators
-        for key, value in metadata.items():
-            key_lower = key.lower()
-            value_str = str(value).lower() if value else ""
-            
-            if any(pattern in key_lower for pattern in ['type', 'model_type', 'architecture']):
-                if 'lora' in value_str:
-                    return 'lora'
-                elif any(term in value_str for term in ['checkpoint', 'diffusion']):
-                    return 'checkpoint'
-                elif 'vae' in value_str:
-                    return 'vae'
-                elif 'controlnet' in value_str:
-                    return 'controlnet'
+        score = 0.0
         
-        # Check for training indicators (suggests LoRA)
-        training_indicators = ['epochs', 'steps', 'learning_rate', 'rank', 'alpha']
-        if any(indicator in key.lower() for key in metadata.keys() for indicator in training_indicators):
-            return 'lora'
+        # Check for specific metadata keys that indicate model type
+        if 'ss_network_module' in metadata:  # LoRA training info
+            score += 0.3
+        if 'ss_base_model_version' in metadata:  # Base model info
+            score += 0.2
+        if 'ss_tag_frequency' in metadata:  # Training tags
+            score += 0.2
+        if 'modelspec.architecture' in metadata:  # Architecture info
+            score += 0.3
         
-        # Fallback to architecture-based detection
-        if architecture == 'lora':
-            return 'lora'
-        elif architecture in ['vae', 'video_vae']:
-            return 'vae'
-        elif architecture in ['flux', 'diffusion']:
-            return 'checkpoint'
-        
-        return 'unknown'
+        return min(score, 1.0)
     
-    def analyze_tensor_architecture(self, tensor_names: List[str]) -> str:
-        """Analyze tensor names to determine architecture using database patterns"""
-        if not tensor_names:
-            return 'unknown'
-        
-        tensor_str = ' '.join(tensor_names).lower()
-        
-        # Use database patterns if available
-        if hasattr(self, 'architecture_patterns_dict') and self.architecture_patterns_dict:
-            best_match = None
-            best_confidence = 0.0
-            
-            for architecture, patterns in self.architecture_patterns_dict.items():
-                for pattern, confidence in patterns:
-                    import re
-                    if re.search(pattern, tensor_str, re.IGNORECASE):
-                        if confidence > best_confidence:
-                            best_match = architecture
-                            best_confidence = confidence
-            
-            if best_match:
-                return best_match
-        
-        # Fallback patterns
-        if any(pattern in tensor_str for pattern in ['.lora_up.', '.lora_down.', '.alpha']):
-            return 'lora'
-        elif any(pattern in tensor_str for pattern in ['double_blocks', 'single_blocks', 'img_attn', 'txt_attn']):
-            return 'flux'
-        elif any('downsamples' in name and 'residual' in name for name in tensor_names):
-            return 'video_vae'
-        elif any(pattern in tensor_str for pattern in ['encoder.', 'decoder.', 'autoencoder']):
-            return 'vae'
-        elif any(pattern in tensor_str for pattern in ['diffusion_model', 'unet']):
-            return 'diffusion'
-        elif 'control_model' in tensor_str or 'controlnet' in tensor_str:
-            return 'controlnet'
-        
-        return 'unknown'
-    
-    def determine_sub_type(self, primary_type: str, base_model: Optional[str], filename: str) -> str:
-        """Determine sub-type based on primary type and base model using database rules"""
-        filename_lower = filename.lower()
-        
-        if base_model:
-            return f"{base_model}_{primary_type}"
-        
-        # Use database rules if available
-        if hasattr(self, 'sub_type_rules') and self.sub_type_rules:
-            for rule_primary_type, sub_type, pattern, pattern_type, confidence in self.sub_type_rules:
-                if rule_primary_type == primary_type:
-                    if pattern_type == 'filename':
-                        import re
-                        if re.search(pattern, filename_lower, re.IGNORECASE):
-                            return sub_type
-                    elif pattern_type.startswith('filesize_'):
-                        # Handle filesize-based rules for GGUF
-                        if primary_type == 'gguf':
-                            return sub_type
-        
-        # Fallback to basic logic
-        return primary_type
-    
-    def determine_gguf_subtype(self, filename: str, file_size: int) -> str:
-        """Determine GGUF sub-type from filename"""
-        filename_lower = filename.lower()
-        
-        if 'ltxv' in filename_lower or ('ltx' in filename_lower and 'video' in filename_lower):
-            return 'ltx_video'
-        elif any(term in filename_lower for term in ['t2v', 'text2video']):
-            return 'text_to_video'
-        elif any(term in filename_lower for term in ['i2v', 'image2video']):
-            return 'image_to_video'
-        elif 'video' in filename_lower:
-            return 'video_model'
-        elif 'umt5' in filename_lower or 'encoder' in filename_lower:
-            return 'text_encoder'
-        else:
-            # Default to LLM classification
-            if file_size > 10_000_000_000:  # > 10GB
-                return 'large_llm'
-            elif file_size > 1_000_000_000:  # > 1GB
-                return 'medium_llm'
-            else:
-                return 'small_llm'
-    
-    def extract_triggers_from_metadata(self, metadata: Dict) -> Optional[List[str]]:
+    def extract_triggers_from_safetensors(self, metadata: Dict) -> List[str]:
         """Extract trigger words from SafeTensors metadata"""
         triggers = []
         
-        # Parse ss_tag_frequency
+        # Method 1: Check ss_tag_frequency for training tags
         if 'ss_tag_frequency' in metadata:
-            triggers.extend(self.parse_tag_frequency(metadata['ss_tag_frequency']))
+            try:
+                tag_freq = json.loads(metadata['ss_tag_frequency'])
+                if isinstance(tag_freq, dict):
+                    # Get most frequent tags (potential triggers)
+                    for dataset, tags in tag_freq.items():
+                        if isinstance(tags, dict):
+                            # Sort by frequency, take top tags
+                            sorted_tags = sorted(tags.items(), key=lambda x: x[1], reverse=True)
+                            for tag, freq in sorted_tags[:5]:  # Top 5 tags
+                                if freq > 10 and len(tag) > 2:  # Minimum frequency and length
+                                    triggers.append(tag.upper())
+            except:
+                pass
         
-        # Parse ss_output_name
+        # Method 2: Check ss_output_name for trigger hints
         if 'ss_output_name' in metadata:
-            triggers.extend(self.parse_output_name(metadata['ss_output_name']))
+            output_name = metadata['ss_output_name']
+            # Extract potential trigger from output name
+            if isinstance(output_name, str) and len(output_name) > 0:
+                # Clean up the output name to extract trigger
+                clean_name = re.sub(r'[_\-]', ' ', output_name)
+                triggers.append(clean_name.upper())
         
-        # Look for explicit trigger fields
-        for key, value in metadata.items():
-            if any(pattern in key.lower() for pattern in ['trigger', 'activation', 'keyword']):
-                triggers.extend(self.parse_trigger_field(str(value)))
+        # Method 3: Check modelspec.title
+        if 'modelspec.title' in metadata:
+            title = metadata['modelspec.title']
+            if isinstance(title, str):
+                triggers.append(title.upper())
         
-        return self.clean_and_deduplicate_triggers(triggers) if triggers else None
-    
-    def parse_tag_frequency(self, tag_frequency_str: str) -> List[str]:
-        """Parse ss_tag_frequency JSON to extract trigger words"""
-        try:
-            tag_data = json.loads(tag_frequency_str)
-            triggers = []
-            
-            for dataset_name, tags in tag_data.items():
-                if isinstance(tags, dict):
-                    for tag, frequency in tags.items():
-                        if self.is_likely_trigger_word(tag, frequency):
-                            triggers.append(tag.upper())
-            
-            return triggers
-        except (json.JSONDecodeError, TypeError, AttributeError):
-            return []
-    
-    def parse_output_name(self, output_name: str) -> List[str]:
-        """Extract potential trigger words from ss_output_name"""
-        if not output_name:
-            return []
-        
-        potential_triggers = []
-        for part in output_name.replace('_', ' ').replace('-', ' ').split():
-            if self.is_likely_trigger_word(part):
-                potential_triggers.append(part.upper())
-        
-        return potential_triggers
-    
-    def parse_trigger_field(self, value: str) -> List[str]:
-        """Parse explicit trigger fields"""
-        if not value:
-            return []
-        
-        try:
-            parsed_value = json.loads(value)
-            if isinstance(parsed_value, list):
-                return [str(item).upper() for item in parsed_value if item]
-            else:
-                return [str(parsed_value).upper()]
-        except (json.JSONDecodeError, TypeError):
-            triggers = []
-            for part in value.replace(',', ' ').replace(';', ' ').split():
-                part = part.strip().strip('"\'')
-                if part and len(part) > 1:
-                    triggers.append(part.upper())
-            return triggers
-    
-    def is_likely_trigger_word(self, word: str, frequency: int = None) -> bool:
-        """Determine if a word is likely a trigger word"""
-        if not word or len(word) < 2:
-            return False
-        
-        word_lower = word.lower()
-        
-        excluded_words = {
-            'img', 'image', 'photo', 'picture', 'style', 'lora', 'model',
-            'training', 'dataset', 'epoch', 'step', 'version', 'v1', 'v2',
-            'base', 'fine', 'tuned', 'checkpoint', 'safetensors', 'the', 'and',
-            'or', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'
-        }
-        
-        if word_lower in excluded_words:
-            return False
-        
-        if frequency is not None and frequency > 100:
-            return True
-        
-        return True
-    
-    def clean_and_deduplicate_triggers(self, triggers: List[str]) -> List[str]:
-        """Clean and deduplicate trigger words"""
-        if not triggers:
-            return []
-        
-        seen = set()
-        cleaned = []
-        
+        # Filter out common non-trigger words
+        common_words = {'lora', 'model', 'style', 'concept', 'flux', 'sdxl', 'sd15', 'checkpoint'}
+        filtered_triggers = []
         for trigger in triggers:
-            trigger_clean = trigger.strip().upper()
-            if trigger_clean and trigger_clean not in seen and len(trigger_clean) > 1:
-                seen.add(trigger_clean)
-                cleaned.append(trigger_clean)
+            if trigger.lower() not in common_words and len(trigger) > 1:
+                filtered_triggers.append(trigger)
         
-        return cleaned[:5]  # Limit to 5 trigger words
+        return list(set(filtered_triggers))  # Remove duplicates
     
-    def calculate_file_hash(self, file_path: Path) -> str:
-        """Calculate SHA256 hash of file"""
-        hash_sha256 = hashlib.sha256()
+    def extract_base_model_from_metadata(self, metadata: Dict) -> str:
+        """Extract base model information from metadata"""
+        if 'ss_base_model_version' in metadata:
+            base_version = metadata['ss_base_model_version'].lower()
+            if 'flux' in base_version:
+                return 'flux'
+            elif 'xl' in base_version or 'sdxl' in base_version:
+                return 'sdxl'
+            elif '1.5' in base_version or 'sd15' in base_version:
+                return 'sd15'
+            elif 'sd3' in base_version:
+                return 'sd3'
+        
+        if 'modelspec.architecture' in metadata:
+            arch = metadata['modelspec.architecture'].lower()
+            if 'flux' in arch:
+                return 'flux'
+            elif 'stable-diffusion-xl' in arch:
+                return 'sdxl'
+            elif 'stable-diffusion-v1' in arch:
+                return 'sd15'
+        
+        return 'unknown'
+    
+    def determine_sub_type(self, primary_type: str, base_model: str, filename: str) -> str:
+        """Determine sub-type based on primary type, base model, and filename"""
+        filename_lower = filename.lower()
+        
+        if primary_type == 'lora':
+            if base_model == 'flux':
+                return 'flux_lora'
+            elif base_model == 'sdxl':
+                return 'sdxl_lora'
+            elif base_model == 'sd15':
+                return 'sd15_lora'
+            elif 'pony' in filename_lower:
+                return 'pony_lora'
+            elif 'video' in filename_lower:
+                return 'video_lora'
+            else:
+                return 'unknown_lora'
+        
+        elif primary_type == 'checkpoint':
+            if base_model == 'flux':
+                return 'flux_checkpoint'
+            elif base_model == 'sdxl':
+                return 'sdxl_checkpoint'
+            elif base_model == 'sd15':
+                return 'sd15_checkpoint'
+            elif 'wan' in filename_lower:
+                return 'wan_checkpoint'
+            elif 'video' in filename_lower:
+                return 'video_checkpoint'
+            else:
+                return 'unknown_checkpoint'
+        
+        elif primary_type == 'vae':
+            if 'video' in filename_lower:
+                return 'video_vae'
+            elif base_model == 'sdxl':
+                return 'sdxl_vae'
+            else:
+                return 'standard_vae'
+        
+        elif primary_type == 'controlnet':
+            if 'openpose' in filename_lower:
+                return 'openpose_controlnet'
+            elif 'depth' in filename_lower:
+                return 'depth_controlnet'
+            elif 'canny' in filename_lower:
+                return 'canny_controlnet'
+            else:
+                return 'unknown_controlnet'
+        
+        return 'unknown'
+    
+    def calculate_file_hash(self, file_path: Path) -> Optional[str]:
+        """Calculate SHA-256 hash of file"""
         try:
+            hash_sha256 = hashlib.sha256()
             with open(file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
                     hash_sha256.update(chunk)
             return hash_sha256.hexdigest()
-        except Exception:
-            return ""
+        except Exception as e:
+            print(f"Error calculating hash for {file_path}: {e}")
+            return None

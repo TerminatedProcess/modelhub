@@ -739,6 +739,38 @@ class ModelHubDB:
         if existing_model:
             if not quiet:
                 print(f"Model already exists: {existing_model.filename}")
+            
+            # Even for existing models, we still need to handle symlink conversion
+            # Load config for symlink settings
+            if config_manager is None:
+                from config import ConfigManager
+                config_manager = ConfigManager()
+                config_manager.load_config()
+            
+            raw_config = config_manager.get_raw_config()
+            scanning_config = raw_config.get('scanning', {})
+            preserve_originals = scanning_config.get('preserve_originals', False)
+            
+            # If not preserving originals, convert this duplicate to symlink
+            if not preserve_originals:
+                # Get storage path for the existing model
+                storage_dir = model_hub_path / "models" / file_hash
+                storage_path = storage_dir / existing_model.filename
+                
+                if storage_path.exists():
+                    try:
+                        # Replace current file with symlink to existing storage
+                        file_path.unlink()  # Remove current file
+                        file_path.symlink_to(storage_path)  # Create symlink
+                        if not quiet:
+                            print(f"Converted duplicate to symlink: {file_path.name}")
+                    except Exception as e:
+                        if not quiet:
+                            print(f"Warning: Failed to create symlink for duplicate: {e}")
+                else:
+                    if not quiet:
+                        print(f"Warning: Storage file not found for existing model: {storage_path}")
+            
             return existing_model
         
         # Get file info
@@ -802,19 +834,24 @@ class ModelHubDB:
         
         classified_at = datetime.now().isoformat()
         
-        # Insert into database with comprehensive classification data
+        # Insert into database with comprehensive classification data including enhanced scoring
         cursor = self.conn.execute("""
             INSERT INTO models (
                 file_hash, filename, file_size, file_extension,
                 primary_type, sub_type, confidence, classification_method,
-                tensor_count, architecture, triggers, classified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tensor_count, architecture, precision, quantization, triggers, 
+                filename_score, size_score, metadata_score, tensor_score, classified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             file_hash, filename, file_size, file_extension,
             classification.primary_type, classification.sub_type, 
             classification.confidence, classification.method,
             classification.tensor_count, classification.architecture,
-            triggers_str, classified_at
+            getattr(classification, 'precision', None), getattr(classification, 'quantization', None),
+            triggers_str, 
+            getattr(classification, 'filename_score', 0.0), getattr(classification, 'size_score', 0.0),
+            getattr(classification, 'metadata_score', 0.0), getattr(classification, 'tensor_score', 0.0),
+            classified_at
         ))
         
         model_id = cursor.lastrowid
