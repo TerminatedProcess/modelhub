@@ -132,6 +132,7 @@ class ModelHubDB:
                     -- Classification results
                     primary_type TEXT NOT NULL,
                     sub_type TEXT NOT NULL,
+                    triggers TEXT,  -- Trigger words (denormalized for easy browsing)
                     confidence REAL NOT NULL,
                     classification_method TEXT NOT NULL,
                     
@@ -140,9 +141,6 @@ class ModelHubDB:
                     architecture TEXT,
                     precision TEXT,
                     quantization TEXT,
-                    
-                    -- Trigger words (denormalized for easy browsing)
-                    triggers TEXT,
                     
                     -- Classification scores
                     filename_score REAL DEFAULT 0.0,

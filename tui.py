@@ -26,13 +26,14 @@ class ModelHubTUI:
         # Navigation state
         self.current_page = 0
         self.selected_row = 0
-        self.page_size = 20
+        self.display_offset = 0  # For scrolling within the loaded models
+        self.page_size = config_manager.config.page_size if config_manager.config else 20
         
         # Filter state
         self.current_filter = None
         self.search_term = None
-        self.sort_by = "classified_at"
-        self.sort_order = "DESC"
+        self.sort_by = "filename"
+        self.sort_order = "ASC"
         
         # UI state
         self.status_message = ""
@@ -63,6 +64,10 @@ class ModelHubTUI:
                 self.prev_page()
             elif key == curses.KEY_RIGHT:
                 self.next_page()
+            elif key == curses.KEY_PPAGE:  # Page Up
+                self.page_up()
+            elif key == curses.KEY_NPAGE:  # Page Down
+                self.page_down()
             elif key == ord('d'):
                 self.show_model_details()
             elif key == ord('f'):
@@ -176,11 +181,16 @@ class ModelHubTUI:
         except curses.error:
             pass
         
-        # Model list
-        for i, model in enumerate(self.models):
-            y = 4 + i
-            if y >= self.height - 3:
+        # Model list with scrolling
+        max_display_rows = self.height - 7  # Reserve space for header, help, status
+        
+        for i in range(max_display_rows):
+            model_index = self.display_offset + i
+            if model_index >= len(self.models):
                 break
+                
+            model = self.models[model_index]
+            y = 4 + i
             
             try:
                 # Show LoRA triggers only for LoRA models, otherwise blank
@@ -191,13 +201,13 @@ class ModelHubTUI:
                 
                 line = f"{model.filename[:50]:<50} {model.primary_type:<12} {model.sub_type:<12} {triggers:<30}"
                 
-                attr = curses.color_pair(2) if i == self.selected_row else 0
+                attr = curses.color_pair(2) if model_index == self.selected_row else 0
                 self.stdscr.addstr(y, 0, line[:self.width-1], attr)
             except curses.error:
                 pass
         
         # Help line
-        help_line = "↑/↓ Select | ←/→ Page | d Details | S Scan | f Filter | s Search | r Reset | h Help | q Quit"
+        help_line = "↑/↓ Select | PgUp/PgDn Jump | ←/→ Page | d Details | S Scan | f Filter | s Search | r Reset | h Help | q Quit"
         try:
             self.stdscr.addstr(self.height-2, 0, help_line[:self.width-1], curses.color_pair(3))
         except curses.error:
@@ -217,6 +227,7 @@ class ModelHubTUI:
             "",
             "Navigation:",
             "  ↑/↓ - Move selection up/down",
+            "  PgUp/PgDn - Jump by page",
             "  ←/→ - Previous/next page",
             "  ENTER or 'd' - Show model details",
             "",
@@ -255,10 +266,21 @@ class ModelHubTUI:
                 pass
     
     def move_selection(self, direction: int):
-        """Move selection up or down"""
+        """Move selection up or down with scrolling"""
         new_selection = self.selected_row + direction
         if 0 <= new_selection < len(self.models):
             self.selected_row = new_selection
+            
+            # Adjust display offset for scrolling
+            max_display_rows = self.height - 7
+            
+            # Scroll down if selection is below visible area
+            if self.selected_row >= self.display_offset + max_display_rows:
+                self.display_offset = self.selected_row - max_display_rows + 1
+                
+            # Scroll up if selection is above visible area
+            elif self.selected_row < self.display_offset:
+                self.display_offset = self.selected_row
     
     def next_page(self):
         """Go to next page"""
@@ -272,7 +294,29 @@ class ModelHubTUI:
         if self.current_page > 0:
             self.current_page -= 1
             self.selected_row = 0
+            self.display_offset = 0
             self.load_models()
+    
+    def page_up(self):
+        """Jump up by visible page size"""
+        max_display_rows = self.height - 7
+        new_selection = max(0, self.selected_row - max_display_rows)
+        self.selected_row = new_selection
+        
+        # Adjust display offset
+        if self.selected_row < self.display_offset:
+            self.display_offset = max(0, self.selected_row - max_display_rows // 2)
+    
+    def page_down(self):
+        """Jump down by visible page size"""
+        max_display_rows = self.height - 7
+        new_selection = min(len(self.models) - 1, self.selected_row + max_display_rows)
+        self.selected_row = new_selection
+        
+        # Adjust display offset
+        if self.selected_row >= self.display_offset + max_display_rows:
+            self.display_offset = min(len(self.models) - max_display_rows, 
+                                    self.selected_row - max_display_rows // 2)
     
     def toggle_help(self):
         """Toggle help screen"""
@@ -295,6 +339,7 @@ class ModelHubTUI:
         self.search_term = None
         self.current_page = 0
         self.selected_row = 0
+        self.display_offset = 0
         self.load_models()
         self.status_message = "Filters reset"
     

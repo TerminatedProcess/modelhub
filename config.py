@@ -14,6 +14,7 @@ from dataclasses import dataclass
 class Config:
     """Configuration data structure"""
     model_hub_path: str
+    page_size: int
     file_extensions: List[str]
     default_deploy_targets: List[Dict[str, Any]]
 
@@ -35,6 +36,7 @@ class ConfigManager:
             
             self.config = Config(
                 model_hub_path=config_data.get('model_hub', {}).get('path', './model-hub'),
+                page_size=config_data.get('model_hub', {}).get('page_size', 20),
                 file_extensions=config_data.get('file_extensions', ['.safetensors', '.ckpt', '.pth', '.pt']),
                 default_deploy_targets=config_data.get('default_deploy_targets', [])
             )
@@ -57,7 +59,8 @@ class ConfigManager:
         """Create default configuration file"""
         default_config = {
             'model_hub': {
-                'path': './model-hub'
+                'path': './model-hub',
+                'page_size': 20
             },
             'scanning': {
                 'preserve_originals': False     # Keep original files (no symlinks), default: false
