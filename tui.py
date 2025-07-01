@@ -170,7 +170,7 @@ class ModelHubTUI:
         self.stdscr.addstr(1, 0, filter_info[:self.width-1])
         
         # Column headers
-        headers = f"{'Type':<12} {'Filename':<40} {'Confidence':<10} {'Size':<10} {'Date':<19}"
+        headers = f"{'Model Name':<50} {'Type':<12} {'Subtype':<12} {'Keywords':<30}"
         try:
             self.stdscr.addstr(3, 0, headers[:self.width-1], curses.A_BOLD)
         except curses.error:
@@ -183,9 +183,9 @@ class ModelHubTUI:
                 break
             
             try:
-                size_mb = f"{model.file_size / (1024*1024):.1f}MB"
-                date_str = model.classified_at[:19] if model.classified_at else "Unknown"
-                line = f"{model.primary_type:<12} {model.filename[:40]:<40} {model.confidence:<10.2f} {size_mb:<10} {date_str:<19}"
+                # Show keywords only for loras, otherwise blank
+                keywords = model.triggers if model.primary_type.lower() == 'lora' and model.triggers else ""
+                line = f"{model.filename[:50]:<50} {model.primary_type:<12} {model.sub_type:<12} {keywords[:30]:<30}"
                 
                 attr = curses.color_pair(2) if i == self.selected_row else 0
                 self.stdscr.addstr(y, 0, line[:self.width-1], attr)
