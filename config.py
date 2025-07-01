@@ -59,8 +59,8 @@ class ConfigManager:
         """Create default configuration file"""
         default_config = {
             'model_hub': {
-                'path': './model-hub',
-                'page_size': 20
+                'path': '/mnt/spare2/llm/model-hub',
+                'page_size': 1000
             },
             'scanning': {
                 'preserve_originals': False     # Keep original files (no symlinks), default: false
@@ -75,6 +75,7 @@ class ConfigManager:
             'classification': {
                 'confidence_threshold': 0.5,
                 'enable_external_apis': True,
+                'reclassify_civitai_models': True,
                 'manual_overrides': {
                     # Example: "model_filename.safetensors": "primary_type/sub_type"
                 },

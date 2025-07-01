@@ -208,18 +208,74 @@ class CivitAILookup:
             primary_type = type_mapping.get(model_type, 'unknown')
             base_model = self.extract_base_model(model_info, version_info)
             
+            # Extract trigger words from CivitAI response
+            triggers = self.extract_civitai_triggers(model_info, version_info)
+            
             return {
                 'found': True,
                 'source': 'civitai',
                 'primary_type': primary_type,
                 'base_model': base_model,
                 'name': model_info.get('name', ''),
+                'triggers': triggers,
                 'confidence': 0.99,
                 'raw_data': data
             }
             
         except Exception:
             return {'found': False, 'source': 'parse_error'}
+    
+    def extract_civitai_triggers(self, model_info: Dict, version_info: Dict) -> Optional[List[str]]:
+        """Extract trigger words from CivitAI API response"""
+        triggers = []
+        
+        try:
+            # Check for trigger words in version info
+            if 'trainedWords' in version_info and version_info['trainedWords']:
+                triggers.extend(version_info['trainedWords'])
+            
+            # Check for trigger words in model info
+            if 'trainedWords' in model_info and model_info['trainedWords']:
+                triggers.extend(model_info['trainedWords'])
+            
+            # Check in version description for trigger patterns
+            description = version_info.get('description', '')
+            if description:
+                # Look for common trigger word patterns in description
+                import re
+                trigger_patterns = [
+                    r'trigger\s*word[s]?:\s*([^<\n]+)',
+                    r'activation\s*word[s]?:\s*([^<\n]+)',
+                    r'keyword[s]?:\s*([^<\n]+)',
+                    r'use\s*["\']([^"\']+)["\']',
+                ]
+                
+                for pattern in trigger_patterns:
+                    matches = re.findall(pattern, description, re.IGNORECASE)
+                    for match in matches:
+                        # Split on common separators
+                        words = re.split(r'[,;|]', match.strip())
+                        for word in words:
+                            clean_word = word.strip().strip('"\'').strip()
+                            if clean_word and len(clean_word) > 1:
+                                triggers.append(clean_word)
+            
+            # Clean and deduplicate
+            if triggers:
+                seen = set()
+                cleaned = []
+                for trigger in triggers:
+                    trigger_clean = trigger.strip().upper()
+                    if trigger_clean and trigger_clean not in seen and len(trigger_clean) > 1:
+                        seen.add(trigger_clean)
+                        cleaned.append(trigger_clean)
+                
+                return cleaned[:5] if cleaned else None  # Limit to 5 triggers
+            
+        except Exception:
+            pass
+        
+        return None
     
     def extract_base_model(self, model_info: Dict, version_info: Dict) -> str:
         """Extract base model from CivitAI data"""
@@ -367,7 +423,8 @@ class ModelClassifier:
                 sub_type=sub_type,
                 confidence=civitai_result['confidence'],
                 method="civitai_api",
-                base_model=base_model
+                base_model=base_model,
+                triggers=civitai_result.get('triggers')
             )
         
         # STEP 4: SafeTensors metadata analysis

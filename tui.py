@@ -38,13 +38,13 @@ class ModelHubTUI:
         self.sort_by = "filename"
         self.sort_order = "ASC"
         
-        # Column positions for click detection
+        # Column positions for click detection (accounting for separators)
         self.column_positions = {
-            'filename': (0, 50),
-            'primary_type': (50, 62),
-            'sub_type': (62, 77),
-            'triggers': (77, 102),
-            'classification_method': (102, 122)
+            'filename': (0, 45),
+            'primary_type': (48, 60),
+            'sub_type': (63, 78),
+            'triggers': (81, 116),
+            'classification_method': (119, 141)
         }
         
         # UI state
@@ -99,7 +99,7 @@ class ModelHubTUI:
             elif key == ord('c'):
                 self.configure_deploy()
             elif key == ord('D'):
-                self.deploy_models()
+                self.show_deploy_menu()
             elif key == ord('e'):
                 self.export_models()
             elif key == ord('C'):
@@ -111,7 +111,7 @@ class ModelHubTUI:
             elif key == ord('X'):
                 self.delete_models()
             elif key == ord('\n') or key == curses.KEY_ENTER:
-                self.show_model_details()
+                self.show_model_options()
     
     def setup_curses(self):
         """Initialize curses settings"""
@@ -168,7 +168,7 @@ class ModelHubTUI:
                        tensor_score, classified_at, created_at, updated_at, reclassify
                 FROM models
                 WHERE {' AND '.join(search_terms)}
-                ORDER BY {self.sort_by} {self.sort_order}
+                ORDER BY {self.get_sort_expression()} {self.sort_order}
                 LIMIT {self.page_size} OFFSET {self.current_page * self.page_size}
                 """
                 
@@ -178,15 +178,42 @@ class ModelHubTUI:
                     from database import Model
                     self.models.append(Model(**dict(row)))
             else:
-                self.models = self.db.get_models(
-                    limit=self.page_size,
-                    offset=self.current_page * self.page_size,
-                    sort_by=self.sort_by,
-                    sort_order=self.sort_order
-                )
+                # Use custom sorting for non-filtered queries too
+                query = f"""
+                SELECT id, file_hash, filename, file_size, file_extension,
+                       primary_type, sub_type, confidence, classification_method,
+                       tensor_count, architecture, precision, quantization,
+                       triggers, filename_score, size_score, metadata_score,
+                       tensor_score, classified_at, created_at, updated_at, reclassify
+                FROM models
+                ORDER BY {self.get_sort_expression()} {self.sort_order}
+                LIMIT {self.page_size} OFFSET {self.current_page * self.page_size}
+                """
+                
+                cursor = self.db.conn.execute(query)
+                self.models = []
+                for row in cursor.fetchall():
+                    from database import Model
+                    self.models.append(Model(**dict(row)))
         except Exception as e:
             self.status_message = f"Error loading models: {e}"
             self.models = []
+    
+    def get_sort_expression(self):
+        """Get the SQL sort expression, handling case-insensitive sorting for text fields"""
+        if self.sort_by == 'filename':
+            return "LOWER(filename) COLLATE NOCASE"
+        elif self.sort_by == 'primary_type':
+            return "LOWER(primary_type) COLLATE NOCASE"
+        elif self.sort_by == 'sub_type':
+            return "LOWER(sub_type) COLLATE NOCASE"
+        elif self.sort_by == 'classification_method':
+            return "LOWER(classification_method) COLLATE NOCASE"
+        elif self.sort_by == 'triggers':
+            return "LOWER(triggers) COLLATE NOCASE"
+        else:
+            # For numeric fields, use as-is
+            return self.sort_by
     
     def load_model_types(self):
         """Load model types with counts"""
@@ -227,15 +254,22 @@ class ModelHubTUI:
         # Filter fields on right side
         self.draw_filter_fields()
         
-        # Column headers
-        headers = f"{'Model Name':<50} {'Type':<12} {'Subtype':<15} {'LoraTriggers':<25} {'Method':<20}"
+        # Column headers with separators
+        headers = f"{'Model Name':<45} │ {'Type':<12} │ {'Subtype':<15} │ {'Triggers':<35} │ {'Method':<22}"
         try:
             self.stdscr.addstr(4, 0, headers[:self.width-1], curses.A_BOLD)
         except curses.error:
             pass
+            
+        # Header separator line
+        separator_line = "─" * min(141, self.width-1)
+        try:
+            self.stdscr.addstr(5, 0, separator_line)
+        except curses.error:
+            pass
         
         # Model list with scrolling
-        max_display_rows = self.height - 8  # Reserve space for header, filters, help, status
+        max_display_rows = self.height - 9  # Reserve space for header, separator, filters, help, status
         
         for i in range(max_display_rows):
             model_index = self.display_offset + i
@@ -243,19 +277,19 @@ class ModelHubTUI:
                 break
                 
             model = self.models[model_index]
-            y = 5 + i
+            y = 6 + i
             
             try:
                 # Show LoRA triggers only for LoRA models, otherwise blank
                 triggers = ""
                 if model.primary_type and 'lora' in model.primary_type.lower():
                     if model.triggers:
-                        triggers = model.triggers[:25]  # Limit to 25 chars for display
+                        triggers = model.triggers[:35]  # Increased to 35 chars for display
                 
                 # Classification method, shortened for display
-                method = model.classification_method[:20] if model.classification_method else ""
+                method = model.classification_method[:22] if model.classification_method else ""
                 
-                line = f"{model.filename[:50]:<50} {model.primary_type:<12} {model.sub_type:<15} {triggers:<25} {method:<20}"
+                line = f"{model.filename[:45]:<45} │ {model.primary_type[:12]:<12} │ {model.sub_type[:15]:<15} │ {triggers:<35} │ {method:<22}"
                 
                 attr = curses.color_pair(2) if model_index == self.selected_row else 0
                 self.stdscr.addstr(y, 0, line[:self.width-1], attr)
@@ -263,7 +297,7 @@ class ModelHubTUI:
                 pass
         
         # Help line
-        help_line = "↑/↓ Select | PgUp/PgDn Jump | Click/F Filter | n Non-CivitAI | r Reset | h Help | q Quit"
+        help_line = "↑/↓ Select | PgUp/PgDn Jump | Click/F Filter | n Non-CivitAI | r Reset | R Reclassify | D Deploy | h Help | q Quit"
         try:
             self.stdscr.addstr(self.height-2, 0, help_line[:self.width-1], curses.color_pair(3))
         except curses.error:
@@ -303,7 +337,7 @@ class ModelHubTUI:
             "",
             "Deployment:",
             "  'c' - Configure deploy targets",
-            "  'D' - Deploy models",
+            "  'D' - Deploy menu (packages & symlinks)",
             "  'e' - Export symlink commands",
             "",
             "Cleanup:",
@@ -386,7 +420,7 @@ class ModelHubTUI:
             self.selected_row = new_selection
             
             # Adjust display offset for scrolling
-            max_display_rows = self.height - 8
+            max_display_rows = self.height - 9
             
             # Scroll down if selection is below visible area
             if self.selected_row >= self.display_offset + max_display_rows:
@@ -413,7 +447,7 @@ class ModelHubTUI:
     
     def page_up(self):
         """Jump up by visible page size"""
-        max_display_rows = self.height - 8
+        max_display_rows = self.height - 9
         new_selection = max(0, self.selected_row - max_display_rows)
         self.selected_row = new_selection
         
@@ -423,7 +457,7 @@ class ModelHubTUI:
     
     def page_down(self):
         """Jump down by visible page size"""
-        max_display_rows = self.height - 8
+        max_display_rows = self.height - 9
         new_selection = min(len(self.models) - 1, self.selected_row + max_display_rows)
         self.selected_row = new_selection
         
@@ -451,10 +485,10 @@ class ModelHubTUI:
                 self.activate_filter_field('subtype')
             elif my == 4:  # Column headers line
                 self.handle_column_header_click(mx)
-            elif my >= 5:  # Model list area
+            elif my >= 6:  # Model list area
                 self.deactivate_filter_field()
                 # Calculate which model was clicked
-                list_row = my - 5
+                list_row = my - 6
                 if list_row < len(self.models):
                     self.selected_row = self.display_offset + list_row
         except curses.error:
@@ -569,18 +603,268 @@ class ModelHubTUI:
             self.current_page = 0
             self.load_models()
             
-            # Show sort indicator in status
+            # Show sort indicator in status with model count
             direction = "↑" if self.sort_order == "ASC" else "↓"
             column_name = clicked_column.replace('_', ' ').title()
-            self.status_message = f"Sorted by {column_name} {direction}"
+            self.status_message = f"Sorted by {column_name} {direction} ({len(self.models)} models)"
     
-    # Model operations (STUBS)
-    def show_model_details(self):
-        """Show detailed model information (STUB)"""
-        if self.models and self.selected_row < len(self.models):
+    # Model operations
+    def show_model_options(self):
+        """Show options popup for selected model"""
+        if not self.models or self.selected_row >= len(self.models):
+            self.status_message = "No model selected"
+            return
+            
+        model = self.models[self.selected_row]
+        
+        # Create popup window
+        popup_height = 8
+        popup_width = 50
+        popup_y = self.height // 2 - popup_height // 2
+        popup_x = self.width // 2 - popup_width // 2
+        
+        popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
+        popup_win.box()
+        
+        # Show model filename in title
+        title = f" {model.filename[:44]} "
+        popup_win.addstr(0, 2, title[:popup_width-4], curses.A_BOLD)
+        
+        # Menu options - add Copy Triggers for LoRA models
+        options = []
+        
+        # Add Copy Triggers as first option for LoRA models with triggers
+        if model.primary_type and 'lora' in model.primary_type.lower() and model.triggers:
+            options.append("Copy Triggers")
+            
+        options.extend([
+            "Re-classify",
+            "View Metadata",
+            "ln -s to clipboard",
+            "Delete"
+        ])
+        
+        selected_option = 0
+        
+        while True:
+            # Clear content area
+            for i in range(1, popup_height - 1):
+                popup_win.addstr(i, 1, " " * (popup_width - 2))
+            
+            # Draw options
+            for i, option in enumerate(options):
+                y = 2 + i
+                attr = curses.color_pair(2) if i == selected_option else 0
+                popup_win.addstr(y, 3, f"{option}", attr)
+            
+            popup_win.refresh()
+            
+            # Handle input
+            key = self.stdscr.getch()  # Use main screen getch instead of popup
+            
+            if key == curses.KEY_UP and selected_option > 0:
+                selected_option -= 1
+            elif key == curses.KEY_DOWN and selected_option < len(options) - 1:
+                selected_option += 1
+            elif key == ord('\n') or key == curses.KEY_ENTER:
+                del popup_win
+                self.handle_model_option(model, selected_option)
+                break
+            elif key == 27 or key == ord('q'):  # Escape or 'q'
+                del popup_win
+                break
+    
+    def handle_model_option(self, model: Model, option_index: int):
+        """Handle selected model option"""
+        # Check if this is a LoRA with triggers (affects option indexing)
+        has_copy_triggers = (model.primary_type and 'lora' in model.primary_type.lower() and model.triggers)
+        
+        if option_index == 0 and has_copy_triggers:  # Copy Triggers (LoRA only - first option)
+            self.copy_model_triggers(model)
+        elif option_index == 0 and not has_copy_triggers:  # Re-classify (first option for non-LoRA)
+            self.reclassify_single_model(model)
+        elif option_index == 1:  # Re-classify (second option for LoRA with triggers)
+            self.reclassify_single_model(model)
+        elif option_index == 2:  # View Metadata
+            self.show_model_details(model)
+        elif option_index == 3:  # ln -s to clipboard
+            self.copy_symlink_command(model)
+        elif option_index == 4:  # Delete
+            self.delete_single_model(model)
+    
+    def show_model_details(self, model: Model = None):
+        """Show detailed model information"""
+        if not model and self.models and self.selected_row < len(self.models):
             model = self.models[self.selected_row]
-            self.status_message = f"Show details for: {model.filename} - STUB"
+        
+        if not model:
+            self.status_message = "No model selected"
+            return
+            
+        self.status_message = f"Show details for: {model.filename} - STUB"
         # TODO: Implement model details dialog
+    
+    def copy_model_triggers(self, model: Model):
+        """Copy LoRA model triggers to clipboard"""
+        if not model.triggers:
+            self.status_message = f"No triggers found for {model.filename}"
+            return
+            
+        try:
+            from clipboard_utils import copy_to_clipboard
+            
+            # Clean up and format triggers
+            triggers = model.triggers.strip()
+            
+            if copy_to_clipboard(triggers):
+                self.status_message = f"Copied triggers to clipboard: {triggers}"
+            else:
+                self.status_message = f"Failed to copy triggers. Install xclip/wl-clipboard"
+                
+        except Exception as e:
+            self.status_message = f"Clipboard error: {e}"
+    
+    def copy_symlink_command(self, model: Model):
+        """Copy symbolic link command to clipboard"""
+        try:
+            from clipboard_utils import copy_to_clipboard
+            
+            # Get model hub path and construct full path to model file
+            model_hub_path = self.config.get_model_hub_path()
+            full_path = model_hub_path / "models" / model.file_hash / model.filename
+            
+            # Generate ln -s command
+            symlink_command = f"ln -s {full_path} ."
+            
+            if copy_to_clipboard(symlink_command):
+                self.status_message = f"Copied symlink command to clipboard: {model.filename}"
+            else:
+                self.status_message = f"Failed to copy symlink command. Install xclip/wl-clipboard"
+                
+        except Exception as e:
+            self.status_message = f"Symlink clipboard error: {e}"
+    
+    def show_deploy_menu(self):
+        """Show deployment options menu"""
+        if not self.models:
+            self.status_message = "No models loaded"
+            return
+            
+        # Create popup window
+        popup_height = 8
+        popup_width = 50
+        popup_y = self.height // 2 - popup_height // 2
+        popup_x = self.width // 2 - popup_width // 2
+        
+        popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
+        popup_win.box()
+        
+        # Show title
+        title = " Deploy Options "
+        popup_win.addstr(0, 2, title, curses.A_BOLD)
+        
+        # Menu options
+        options = [
+            "Deploy Packages",
+            "Generate symbolic links",
+            "Model names to clipboard"
+        ]
+        
+        selected_option = 0
+        
+        while True:
+            # Clear content area
+            for i in range(1, popup_height - 1):
+                popup_win.addstr(i, 1, " " * (popup_width - 2))
+            
+            # Draw options
+            for i, option in enumerate(options):
+                y = 2 + i
+                attr = curses.color_pair(2) if i == selected_option else 0
+                popup_win.addstr(y, 3, f"{option}", attr)
+            
+            popup_win.refresh()
+            
+            # Handle input
+            key = self.stdscr.getch()
+            
+            if key == curses.KEY_UP and selected_option > 0:
+                selected_option -= 1
+            elif key == curses.KEY_DOWN and selected_option < len(options) - 1:
+                selected_option += 1
+            elif key == ord('\n') or key == curses.KEY_ENTER:
+                del popup_win
+                self.handle_deploy_option(selected_option)
+                break
+            elif key == 27 or key == ord('q'):  # Escape or 'q'
+                del popup_win
+                break
+    
+    def handle_deploy_option(self, option_index: int):
+        """Handle selected deploy option"""
+        if option_index == 0:  # Deploy Packages
+            self.deploy_packages()
+        elif option_index == 1:  # Generate symbolic links
+            self.generate_symlinks_for_current_models()
+        elif option_index == 2:  # Copy filenames list
+            self.copy_filenames_list()
+    
+    def deploy_packages(self):
+        """Deploy packages functionality (STUB)"""
+        self.status_message = "Deploy packages functionality - STUB"
+        # TODO: Implement package deployment
+    
+    def generate_symlinks_for_current_models(self):
+        """Generate symbolic link commands for all current filtered models"""
+        if not self.models:
+            self.status_message = "No models to generate links for"
+            return
+            
+        try:
+            from clipboard_utils import copy_to_clipboard
+            
+            # Get model hub path
+            model_hub_path = self.config.get_model_hub_path()
+            
+            # Generate ln -s commands for all current models
+            symlink_commands = []
+            for model in self.models:
+                full_path = model_hub_path / "models" / model.file_hash / model.filename
+                symlink_commands.append(f"ln -s {full_path} .")
+            
+            # Join all commands with newlines
+            commands_text = "\n".join(symlink_commands)
+            
+            if copy_to_clipboard(commands_text):
+                self.status_message = f"Copied {len(symlink_commands)} symlink commands to clipboard"
+            else:
+                self.status_message = f"Failed to copy symlink commands. Install xclip/wl-clipboard"
+                
+        except Exception as e:
+            self.status_message = f"Symlink generation error: {e}"
+    
+    def copy_filenames_list(self):
+        """Copy list of filenames (no paths) for current filtered models"""
+        if not self.models:
+            self.status_message = "No models to copy filenames for"
+            return
+            
+        try:
+            from clipboard_utils import copy_to_clipboard
+            
+            # Generate list of just filenames
+            filenames = [model.filename for model in self.models]
+            
+            # Join all filenames with newlines
+            filenames_text = "\n".join(filenames)
+            
+            if copy_to_clipboard(filenames_text):
+                self.status_message = f"Copied {len(filenames)} filenames to clipboard"
+            else:
+                self.status_message = f"Failed to copy filenames. Install xclip/wl-clipboard"
+                
+        except Exception as e:
+            self.status_message = f"Filenames copy error: {e}"
     
     def scan_directory(self):
         """Scan directory for new models - exit to console like pacman"""
@@ -695,9 +979,242 @@ class ModelHubTUI:
             self.status_message = f"Scan error: {e}"
     
     def reclassify_models(self):
-        """Reclassify models (STUB)"""
-        self.status_message = "Reclassify functionality - STUB"
-        # TODO: Implement reclassification
+        """Reclassify models using current classification logic (respects current filters)"""
+        # Exit ncurses mode for console output
+        curses.endwin()
+        
+        try:
+            print(f"\n=== ModelHub Reclassify ===")
+            
+            # Check config for reclassify behavior
+            raw_config = self.config.get_raw_config()
+            reclassify_civitai = raw_config.get('classification', {}).get('reclassify_civitai_models', False)
+            
+            # Build filter conditions based on current UI filters
+            filter_conditions = []
+            if self.model_filter:
+                filter_conditions.append(f"LOWER(filename) LIKE '%{self.model_filter}%'")
+            if self.type_filter:
+                filter_conditions.append(f"LOWER(primary_type) LIKE '%{self.type_filter}%'")
+            if self.subtype_filter:
+                filter_conditions.append(f"LOWER(sub_type) LIKE '%{self.subtype_filter}%'")
+            if self.non_civitai_filter:
+                filter_conditions.append(f"classification_method != 'civitai_api'")
+            
+            # Add civitai preservation logic
+            if not reclassify_civitai:
+                filter_conditions.append("classification_method != 'civitai_api'")
+            
+            # Build where clause
+            where_clause = ""
+            if filter_conditions:
+                where_clause = "WHERE " + " AND ".join(filter_conditions)
+            
+            # Show what will be reclassified
+            filter_desc = []
+            if self.model_filter: filter_desc.append(f"model='{self.model_filter}'")
+            if self.type_filter: filter_desc.append(f"type='{self.type_filter}'")
+            if self.subtype_filter: filter_desc.append(f"sub='{self.subtype_filter}'")
+            if self.non_civitai_filter: filter_desc.append("non-civitai")
+            
+            if filter_desc:
+                print(f"Reclassifying filtered models: {', '.join(filter_desc)}")
+            elif reclassify_civitai:
+                print(f"Reclassifying ALL models using current logic...")
+                print(f"(This will update trigger words for CivitAI models)")
+            else:
+                print(f"Reclassifying non-CivitAI models using current logic...")
+                print(f"(CivitAI classifications are preserved as authoritative)")
+            print()
+            
+            # Get models for reclassification based on current filters
+            query = f"""
+            SELECT id, file_hash, filename, file_size, file_extension,
+                   primary_type, sub_type, confidence, classification_method,
+                   tensor_count, architecture, precision, quantization,
+                   triggers, filename_score, size_score, metadata_score,
+                   tensor_score, classified_at, created_at, updated_at, reclassify
+            FROM models
+            {where_clause}
+            ORDER BY filename ASC
+            """
+            cursor = self.db.conn.execute(query)
+            all_models = []
+            for row in cursor.fetchall():
+                from database import Model
+                all_models.append(Model(**dict(row)))
+            
+            if not all_models:
+                print("No models found to reclassify with current filters.")
+                input("\nPress Enter to continue...")
+                return
+            
+            print(f"Found {len(all_models)} models to reclassify")
+            print("-" * 60)
+            
+            # Load classifier with APIs disabled for speed during bulk reclassification
+            from classifier import ModelClassifier
+            raw_config = self.config.get_raw_config()
+            # Temporarily disable external APIs for faster reclassification
+            fast_config = raw_config.copy()
+            fast_config['classification'] = fast_config.get('classification', {}).copy()
+            fast_config['classification']['enable_external_apis'] = False
+            classifier = ModelClassifier(fast_config, database=self.db)
+            
+            # Get model hub path to find the actual files
+            model_hub_path = self.config.get_model_hub_path()
+            
+            reclassified_count = 0
+            error_count = 0
+            
+            for i, model in enumerate(all_models):
+                print(f"[{i+1}/{len(all_models)}] {model.filename}")
+                
+                try:
+                    # Find the model file in storage
+                    storage_path = model_hub_path / "models" / model.file_hash / model.filename
+                    
+                    if not storage_path.exists():
+                        print(f"  ✗ File not found: {storage_path}")
+                        error_count += 1
+                        continue
+                    
+                    # Reclassify using current logic with existing hash (skip hash recalculation)
+                    classification = classifier.classify_model(storage_path, model.file_hash, quiet=True)
+                    
+                    # Prepare trigger words for database storage
+                    triggers_str = ", ".join(classification.triggers) if classification.triggers else None
+                    
+                    # Update database with new classification
+                    from datetime import datetime
+                    classified_at = datetime.now().isoformat()
+                    
+                    with self.db.conn:
+                        self.db.conn.execute("""
+                            UPDATE models SET 
+                                primary_type = ?, sub_type = ?, confidence = ?, 
+                                classification_method = ?, tensor_count = ?, 
+                                architecture = ?, triggers = ?, classified_at = ?,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                        """, (
+                            classification.primary_type, classification.sub_type, 
+                            classification.confidence, classification.method,
+                            classification.tensor_count, classification.architecture,
+                            triggers_str, classified_at, model.id
+                        ))
+                    
+                    print(f"  ✓ Reclassified: {classification.primary_type}/{classification.sub_type} ({classification.confidence:.2f})")
+                    reclassified_count += 1
+                    
+                except Exception as e:
+                    print(f"  ✗ Error: {e}")
+                    error_count += 1
+            
+            # Show results
+            print("-" * 60)
+            print(f"Reclassification complete!")
+            print(f"  Reclassified: {reclassified_count} models")
+            print(f"  Errors:       {error_count} models")
+            print()
+            
+            # Reload models to show updated data
+            self.current_page = 0
+            self.selected_row = 0
+            self.display_offset = 0
+            
+            self.status_message = f"Reclassified {reclassified_count} models, {error_count} errors"
+            
+            input("Press Enter to return to ModelHub...")
+            
+        except Exception as e:
+            print(f"Error during reclassification: {e}")
+            input("Press Enter to continue...")
+            self.status_message = f"Reclassify error: {e}"
+        
+        finally:
+            # Restart ncurses mode
+            self.stdscr.clear()
+            self.stdscr.refresh()
+            # Reload the model list with updated data
+            self.load_models()
+    
+    def reclassify_single_model(self, model: Model):
+        """Reclassify a single model using current classification logic"""
+        # Create progress popup
+        progress_height = 5
+        progress_width = 60
+        progress_y = self.height // 2 - progress_height // 2
+        progress_x = self.width // 2 - progress_width // 2
+        
+        progress_win = curses.newwin(progress_height, progress_width, progress_y, progress_x)
+        progress_win.box()
+        progress_win.addstr(1, 2, "Reclassifying model...", curses.A_BOLD)
+        progress_win.addstr(2, 2, f"File: {model.filename[:52]}")
+        progress_win.addstr(3, 2, "Please wait...")
+        progress_win.refresh()
+        
+        try:
+            # Load classifier with APIs disabled for speed during reclassification
+            from classifier import ModelClassifier
+            raw_config = self.config.get_raw_config()
+            # Temporarily disable external APIs for faster reclassification
+            fast_config = raw_config.copy()
+            fast_config['classification'] = fast_config.get('classification', {}).copy()
+            fast_config['classification']['enable_external_apis'] = False
+            classifier = ModelClassifier(fast_config, database=self.db)
+            
+            # Get model hub path to find the actual file
+            model_hub_path = self.config.get_model_hub_path()
+            storage_path = model_hub_path / "models" / model.file_hash / model.filename
+            
+            if not storage_path.exists():
+                del progress_win
+                self.status_message = f"Error: File not found for {model.filename}"
+                return
+            
+            # Reclassify using current logic with existing hash (skip hash recalculation)
+            classification = classifier.classify_model(storage_path, model.file_hash, quiet=True)
+            
+            # Prepare trigger words for database storage
+            triggers_str = ", ".join(classification.triggers) if classification.triggers else None
+            
+            # Update database with new classification using transaction
+            from datetime import datetime
+            classified_at = datetime.now().isoformat()
+            
+            with self.db.conn:
+                self.db.conn.execute("""
+                    UPDATE models SET 
+                        primary_type = ?, sub_type = ?, confidence = ?, 
+                        classification_method = ?, tensor_count = ?, 
+                        architecture = ?, triggers = ?, classified_at = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (
+                    classification.primary_type, classification.sub_type, 
+                    classification.confidence, classification.method,
+                    classification.tensor_count, classification.architecture,
+                    triggers_str, classified_at, model.id
+                ))
+            
+            # Close progress window
+            del progress_win
+            
+            # Reload models to show updated data
+            self.load_models()
+            
+            self.status_message = f"Reclassified: {model.filename} -> {classification.primary_type}/{classification.sub_type} ({classification.confidence:.2f})"
+            
+        except Exception as e:
+            del progress_win
+            self.status_message = f"Error reclassifying {model.filename}: {e}"
+    
+    
+    def delete_single_model(self, model: Model):
+        """Delete a single model (record and file) - STUB"""
+        self.status_message = f"Delete {model.filename} - STUB"
+        # TODO: Implement single model deletion
     
     def delete_models(self):
         """Delete selected models (STUB)"""
