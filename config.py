@@ -39,10 +39,19 @@ class ConfigManager:
                 default_deploy_targets=config_data.get('default_deploy_targets', [])
             )
             
+            # Store raw config data for classifier
+            self.raw_config = config_data
+            
             return self.config
             
         except Exception as e:
             raise Exception(f"Error loading config: {e}")
+    
+    def get_raw_config(self) -> Dict[str, Any]:
+        """Get raw config dictionary for classifier"""
+        if not hasattr(self, 'raw_config'):
+            self.load_config()
+        return self.raw_config
     
     def create_default_config(self):
         """Create default configuration file"""
@@ -50,12 +59,36 @@ class ConfigManager:
             'model_hub': {
                 'path': './model-hub'
             },
+            'scanning': {
+                'preserve_originals': False     # Keep original files (no symlinks), default: false
+            },
             'file_extensions': [
                 '.safetensors',
                 '.ckpt', 
                 '.pth',
-                '.pt'
+                '.pt',
+                '.gguf'
             ],
+            'classification': {
+                'confidence_threshold': 0.5,
+                'enable_external_apis': True,
+                'manual_overrides': {
+                    # Example: "model_filename.safetensors": "primary_type/sub_type"
+                },
+                'size_rules': {
+                    'checkpoint': {'min': 1_000_000_000, 'max': 50_000_000_000},
+                    'lora': {'min': 1_000_000, 'max': 2_000_000_000},
+                    'vae': {'min': 50_000_000, 'max': 2_000_000_000},
+                    'controlnet': {'min': 100_000_000, 'max': 10_000_000_000},
+                    'clip': {'min': 10_000_000, 'max': 2_000_000_000},
+                    'text_encoder': {'min': 10_000_000, 'max': 25_000_000_000},
+                    'unet': {'min': 500_000_000, 'max': 30_000_000_000},
+                    'gguf': {'min': 100_000_000, 'max': 200_000_000_000},
+                    'upscaler': {'min': 1_000_000, 'max': 500_000_000},
+                    'embedding': {'min': 1_000, 'max': 50_000_000},
+                    'video_model': {'min': 100_000_000, 'max': 100_000_000_000}
+                }
+            },
             'default_deploy_targets': [
                 {
                     'name': 'comfyui',

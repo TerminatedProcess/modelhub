@@ -209,6 +209,67 @@ class ModelHubDB:
                 )
             """)
             
+            # Create classification rules tables
+            cursor.execute("""
+                CREATE TABLE model_types (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    display_name TEXT NOT NULL,
+                    description TEXT,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE size_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_type TEXT NOT NULL,
+                    min_size INTEGER NOT NULL,
+                    max_size INTEGER NOT NULL,
+                    confidence_weight REAL DEFAULT 0.3,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(model_type)
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE sub_type_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    primary_type TEXT NOT NULL,
+                    sub_type TEXT NOT NULL,
+                    pattern TEXT NOT NULL,
+                    pattern_type TEXT DEFAULT 'filename',
+                    confidence_weight REAL DEFAULT 0.8,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE architecture_patterns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    architecture TEXT NOT NULL,
+                    tensor_pattern TEXT NOT NULL,
+                    confidence_weight REAL DEFAULT 0.9,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE external_apis (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    priority INTEGER DEFAULT 1,
+                    rate_limit_delay REAL DEFAULT 1.0,
+                    timeout_seconds INTEGER DEFAULT 10,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             # Create indexes
             cursor.execute("CREATE INDEX idx_models_hash ON models (file_hash)")
             cursor.execute("CREATE INDEX idx_models_type ON models (primary_type, sub_type)")
@@ -222,13 +283,24 @@ class ModelHubDB:
             cursor.execute("CREATE INDEX idx_deploy_links_target ON deploy_links (target_id)")
             cursor.execute("CREATE INDEX idx_deploy_links_deployed ON deploy_links (is_deployed)")
             
+            # Create indexes for classification tables
+            cursor.execute("CREATE INDEX idx_model_types_name ON model_types (name)")
+            cursor.execute("CREATE INDEX idx_size_rules_type ON size_rules (model_type)")
+            cursor.execute("CREATE INDEX idx_sub_type_rules_primary ON sub_type_rules (primary_type)")
+            cursor.execute("CREATE INDEX idx_architecture_patterns_arch ON architecture_patterns (architecture)")
+            cursor.execute("CREATE INDEX idx_external_apis_priority ON external_apis (priority)")
+            
             conn.commit()
             print("✓ Created database tables and indexes")
             
             # Create default deploy data
             self._create_default_deploy_data(cursor)
+            
+            # Create default classification data
+            self._create_default_classification_data(cursor)
+            
             conn.commit()
-            print("✓ Created default deploy configuration")
+            print("✓ Created default deploy and classification configuration")
             
         except Exception as e:
             conn.rollback()
@@ -300,6 +372,118 @@ class ModelHubDB:
             INSERT INTO deploy_mappings (target_id, model_type, folder_path)
             VALUES (?, ?, ?)
         """, deploy_mappings)
+    
+    def _create_default_classification_data(self, cursor):
+        """Create default classification rules and data"""
+        
+        # Default model types
+        model_types = [
+            ('checkpoint', 'Checkpoint', 'Large diffusion model checkpoints'),
+            ('lora', 'LoRA', 'Low-Rank Adaptation fine-tuning models'),
+            ('vae', 'VAE', 'Variational Autoencoder models'),
+            ('controlnet', 'ControlNet', 'Conditional control models'),
+            ('clip', 'CLIP', 'Text-image embedding models'),
+            ('text_encoder', 'Text Encoder', 'Text encoding models'),
+            ('unet', 'UNet', 'U-Net diffusion models'),
+            ('gguf', 'GGUF', 'GGML Universal File format models'),
+            ('upscaler', 'Upscaler', 'Image upscaling models'),
+            ('embedding', 'Embedding', 'Textual inversion embeddings'),
+            ('video_model', 'Video Model', 'Video generation models'),
+            ('mask_model', 'Mask Model', 'Segmentation and masking models'),
+            ('audio_model', 'Audio Model', 'Audio processing models'),
+            ('hypernetwork', 'Hypernetwork', 'Hypernetwork models'),
+            ('unknown', 'Unknown', 'Unclassified models')
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO model_types (name, display_name, description)
+            VALUES (?, ?, ?)
+        """, model_types)
+        
+        # Default size rules (in bytes)
+        size_rules = [
+            ('checkpoint', 1_000_000_000, 50_000_000_000, 0.3),  # 1GB-50GB
+            ('lora', 1_000_000, 2_000_000_000, 0.4),             # 1MB-2GB
+            ('vae', 50_000_000, 2_000_000_000, 0.4),             # 50MB-2GB
+            ('controlnet', 100_000_000, 10_000_000_000, 0.3),    # 100MB-10GB
+            ('clip', 10_000_000, 2_000_000_000, 0.3),            # 10MB-2GB
+            ('text_encoder', 10_000_000, 25_000_000_000, 0.3),   # 10MB-25GB
+            ('unet', 500_000_000, 30_000_000_000, 0.3),          # 500MB-30GB
+            ('gguf', 100_000_000, 200_000_000_000, 0.2),         # 100MB-200GB
+            ('upscaler', 1_000_000, 500_000_000, 0.4),           # 1MB-500MB
+            ('embedding', 1_000, 50_000_000, 0.5),               # 1KB-50MB
+            ('video_model', 100_000_000, 100_000_000_000, 0.3),  # 100MB-100GB
+            ('mask_model', 100_000_000, 2_000_000_000, 0.3),     # 100MB-2GB
+            ('audio_model', 50_000_000, 1_000_000_000, 0.3),     # 50MB-1GB
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO size_rules (model_type, min_size, max_size, confidence_weight)
+            VALUES (?, ?, ?, ?)
+        """, size_rules)
+        
+        # Default sub-type rules (filename patterns)
+        sub_type_rules = [
+            # Checkpoint sub-types
+            ('checkpoint', 'flux_checkpoint', 'flux', 'filename', 0.9),
+            ('checkpoint', 'sdxl_checkpoint', 'xl|sdxl', 'filename', 0.8),
+            ('checkpoint', 'sd3_checkpoint', 'sd3', 'filename', 0.8),
+            ('checkpoint', 'sd15_checkpoint', '.*', 'filename', 0.1),  # Default
+            
+            # LoRA sub-types
+            ('lora', 'flux_lora', 'flux', 'filename', 0.9),
+            ('lora', 'sdxl_lora', 'xl|sdxl', 'filename', 0.8),
+            ('lora', 'hunyuan_i2v_lora', 'hunyuan.*i2v', 'filename', 0.9),
+            ('lora', 'hunyuan_lora', 'hunyuan', 'filename', 0.8),
+            ('lora', 'i2v_lora', 'i2v', 'filename', 0.8),
+            ('lora', 'ltxv_lora', 'ltxv|ltx.*video', 'filename', 0.8),
+            ('lora', 'sd15_lora', '.*', 'filename', 0.1),  # Default
+            
+            # VAE sub-types
+            ('vae', 'video_vae', 'video', 'filename', 0.9),
+            ('vae', 'sdxl_vae', 'xl|sdxl', 'filename', 0.8),
+            ('vae', 'sd15_vae', '.*', 'filename', 0.1),  # Default
+            
+            # GGUF sub-types
+            ('gguf', 'ltx_video', 'ltxv|ltx.*video', 'filename', 0.9),
+            ('gguf', 'text_to_video', 't2v|text2video', 'filename', 0.8),
+            ('gguf', 'image_to_video', 'i2v|image2video', 'filename', 0.8),
+            ('gguf', 'text_encoder', 'umt5|encoder', 'filename', 0.8),
+            ('gguf', 'large_llm', '.*', 'filesize_large', 0.3),  # >10GB
+            ('gguf', 'medium_llm', '.*', 'filesize_medium', 0.3),  # 1-10GB
+            ('gguf', 'small_llm', '.*', 'filesize_small', 0.3),   # <1GB
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO sub_type_rules (primary_type, sub_type, pattern, pattern_type, confidence_weight)
+            VALUES (?, ?, ?, ?, ?)
+        """, sub_type_rules)
+        
+        # Default architecture patterns (tensor analysis)
+        architecture_patterns = [
+            ('lora', '\\.lora_up\\.|lora_down\\.|alpha$', 0.95),
+            ('flux', 'double_blocks|single_blocks|img_attn|txt_attn', 0.95),
+            ('video_vae', 'downsamples.*residual|upsamples.*residual', 0.95),
+            ('vae', 'encoder\\.|decoder\\.|autoencoder', 0.9),
+            ('diffusion', 'diffusion_model|unet', 0.9),
+            ('controlnet', 'control_model|controlnet', 0.9),
+            ('clip', 'text_model|text_projection', 0.8),
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO architecture_patterns (architecture, tensor_pattern, confidence_weight)
+            VALUES (?, ?, ?)
+        """, architecture_patterns)
+        
+        # Default external APIs
+        external_apis = [
+            ('civitai', True, 1, 1.0, 10)
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO external_apis (name, enabled, priority, rate_limit_delay, timeout_seconds)
+            VALUES (?, ?, ?, ?, ?)
+        """, external_apis)
     
     # Model operations
     def get_models(self, limit: int = 100, offset: int = 0, 
@@ -457,6 +641,65 @@ class ModelHubDB:
             links.append(DeployLink(**dict(row)))
         return links
     
+    # Classification rule methods
+    def get_size_rules(self) -> Dict[str, Dict[str, int]]:
+        """Get size rules for model classification"""
+        cursor = self.conn.execute("""
+            SELECT model_type, min_size, max_size, confidence_weight
+            FROM size_rules WHERE enabled = 1
+        """)
+        
+        size_rules = {}
+        for row in cursor.fetchall():
+            model_type, min_size, max_size, confidence_weight = row
+            size_rules[model_type] = {
+                'min': min_size,
+                'max': max_size,
+                'confidence_weight': confidence_weight
+            }
+        
+        return size_rules
+    
+    def get_sub_type_rules(self) -> List[Tuple[str, str, str, str, float]]:
+        """Get sub-type classification rules"""
+        cursor = self.conn.execute("""
+            SELECT primary_type, sub_type, pattern, pattern_type, confidence_weight
+            FROM sub_type_rules WHERE enabled = 1
+            ORDER BY confidence_weight DESC
+        """)
+        
+        return cursor.fetchall()
+    
+    def get_architecture_patterns(self) -> List[Tuple[str, str, float]]:
+        """Get architecture detection patterns"""
+        cursor = self.conn.execute("""
+            SELECT architecture, tensor_pattern, confidence_weight
+            FROM architecture_patterns WHERE enabled = 1
+            ORDER BY confidence_weight DESC
+        """)
+        
+        return cursor.fetchall()
+    
+    def get_external_apis(self) -> List[Tuple[str, bool, int, float, int]]:
+        """Get external API configuration"""
+        cursor = self.conn.execute("""
+            SELECT name, enabled, priority, rate_limit_delay, timeout_seconds
+            FROM external_apis WHERE enabled = 1
+            ORDER BY priority ASC
+        """)
+        
+        return cursor.fetchall()
+    
+    def get_model_types(self) -> List[Tuple[str, str]]:
+        """Get supported model types"""
+        cursor = self.conn.execute("""
+            SELECT name, display_name
+            FROM model_types WHERE enabled = 1
+            ORDER BY name
+        """)
+        
+        return cursor.fetchall()
+    
     # Stub methods for future implementation
     def scan_directory(self, directory: Path, extensions: List[str]) -> List[Path]:
         """Scan directory recursively for model files"""
@@ -485,7 +728,7 @@ class ModelHubDB:
                 hash_sha256.update(chunk)
         return hash_sha256.hexdigest()
     
-    def import_model(self, file_path: Path, model_hub_path: Path, quiet: bool = False) -> Optional[Model]:
+    def import_model(self, file_path: Path, model_hub_path: Path, quiet: bool = False, config_manager=None) -> Optional[Model]:
         """Import a model file into the hub"""
         if not file_path.exists():
             raise FileNotFoundError(f"Model file not found: {file_path}")
@@ -510,67 +753,94 @@ class ModelHubDB:
         storage_dir.mkdir(parents=True, exist_ok=True)
         storage_path = storage_dir / filename
         
-        # Move or copy file to model-hub based on volume
+        # Move or copy file to model-hub based on volume and symlink settings
         try:
+            # Load config for symlink settings
+            if config_manager is None:
+                from config import ConfigManager
+                config_manager = ConfigManager()
+                config_manager.load_config()
+            
+            raw_config = config_manager.get_raw_config()
+            scanning_config = raw_config.get('scanning', {})
+            preserve_originals = scanning_config.get('preserve_originals', False)
+            
             # Check if source and destination are on the same volume
             source_stat = file_path.stat()
             dest_stat = model_hub_path.stat()
             same_volume = source_stat.st_dev == dest_stat.st_dev
             
-            if same_volume:
-                # Same volume: move file (much faster)
+            # Only move if originals will be replaced with symlinks
+            if same_volume and not preserve_originals:
+                # Same volume AND not preserving originals: move file (much faster)
                 shutil.move(str(file_path), str(storage_path))
                 if not quiet:
                     print(f"Moved {filename} to model-hub (same volume)")
                 moved_file = True
             else:
-                # Different volume: copy file
+                # Different volume OR preserving originals: copy file
                 shutil.copy2(file_path, storage_path)
+                reason = "different volume" if not same_volume else "preserving originals"
                 if not quiet:
-                    print(f"Copied {filename} to model-hub (different volume)")
+                    print(f"Copied {filename} to model-hub ({reason})")
                 moved_file = False
                 
         except Exception as e:
             raise Exception(f"Failed to move/copy file: {e}")
         
-        # Basic classification (as requested)
-        primary_type = "checkpoint"
-        sub_type = "wan"
-        confidence = 1.0
-        classification_method = "basic"
+        # Comprehensive classification using new system
+        from classifier import ModelClassifier
+        classifier = ModelClassifier(raw_config, database=self)
+        
+        # Classify the model
+        classification = classifier.classify_model(storage_path, file_hash, quiet)
+        
+        # Prepare trigger words for database storage
+        triggers_str = ", ".join(classification.triggers) if classification.triggers else None
+        
+        # Debug output for trigger extraction
+        if not quiet and classification.triggers and 'lora' in classification.primary_type.lower():
+            print(f"    🎯 Extracted triggers: {', '.join(classification.triggers)}")
+        
         classified_at = datetime.now().isoformat()
         
-        # Insert into database
+        # Insert into database with comprehensive classification data
         cursor = self.conn.execute("""
             INSERT INTO models (
                 file_hash, filename, file_size, file_extension,
                 primary_type, sub_type, confidence, classification_method,
-                classified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tensor_count, architecture, triggers, classified_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             file_hash, filename, file_size, file_extension,
-            primary_type, sub_type, confidence, classification_method,
-            classified_at
+            classification.primary_type, classification.sub_type, 
+            classification.confidence, classification.method,
+            classification.tensor_count, classification.architecture,
+            triggers_str, classified_at
         ))
         
         model_id = cursor.lastrowid
         self.conn.commit()
         
-        # Replace original file with symlink (only if we copied, not moved)
-        try:
-            if not moved_file:
-                # File was copied, so original still exists - replace with symlink
-                file_path.unlink()  # Remove original file
-                file_path.symlink_to(storage_path)  # Create symlink
-                if not quiet:
-                    print(f"Created symlink for {filename}")
-            else:
-                # File was moved, so create symlink at original location
-                file_path.symlink_to(storage_path)  # Create symlink
-                if not quiet:
-                    print(f"Created symlink for {filename}")
-        except Exception as e:
-            print(f"Warning: Failed to create symlink for {filename}: {e}")
+        # Replace original file with symlink (only if not preserving originals)
+        if not preserve_originals:
+            try:
+                if not moved_file:
+                    # File was copied, so original still exists - replace with symlink
+                    file_path.unlink()  # Remove original file
+                    file_path.symlink_to(storage_path)  # Create symlink
+                    if not quiet:
+                        print(f"Created symlink for {filename}")
+                else:
+                    # File was moved, so create symlink at original location
+                    file_path.symlink_to(storage_path)  # Create symlink
+                    if not quiet:
+                        print(f"Created symlink for {filename}")
+            except Exception as e:
+                print(f"Warning: Failed to create symlink for {filename}: {e}")
+        else:
+            if not quiet:
+                print(f"Preserved original file (preserve_originals=True)")
         
         # Return the created model
         return self.get_model_by_id(model_id)

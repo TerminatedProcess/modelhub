@@ -170,7 +170,7 @@ class ModelHubTUI:
         self.stdscr.addstr(1, 0, filter_info[:self.width-1])
         
         # Column headers
-        headers = f"{'Model Name':<50} {'Type':<12} {'Subtype':<12} {'Keywords':<30}"
+        headers = f"{'Model Name':<50} {'Type':<12} {'Subtype':<12} {'LoraTriggers':<30}"
         try:
             self.stdscr.addstr(3, 0, headers[:self.width-1], curses.A_BOLD)
         except curses.error:
@@ -183,9 +183,13 @@ class ModelHubTUI:
                 break
             
             try:
-                # Show keywords only for loras, otherwise blank
-                keywords = model.triggers if model.primary_type.lower() == 'lora' and model.triggers else ""
-                line = f"{model.filename[:50]:<50} {model.primary_type:<12} {model.sub_type:<12} {keywords[:30]:<30}"
+                # Show LoRA triggers only for LoRA models, otherwise blank
+                triggers = ""
+                if model.primary_type and 'lora' in model.primary_type.lower():
+                    if model.triggers:
+                        triggers = model.triggers[:30]  # Limit to 30 chars for display
+                
+                line = f"{model.filename[:50]:<50} {model.primary_type:<12} {model.sub_type:<12} {triggers:<30}"
                 
                 attr = curses.color_pair(2) if i == self.selected_row else 0
                 self.stdscr.addstr(y, 0, line[:self.width-1], attr)
@@ -367,7 +371,7 @@ class ModelHubTUI:
                     print(f"[{i+1}/{len(model_files)}] {file_path.name}")
                     
                     try:
-                        model = self.db.import_model(file_path, model_hub_path, quiet=False)
+                        model = self.db.import_model(file_path, model_hub_path, quiet=False, config_manager=self.config)
                         if model:
                             # Check if this was a new import (not existing)
                             if model.filename == file_path.name:

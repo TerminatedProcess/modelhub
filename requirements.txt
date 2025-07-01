@@ -5,6 +5,9 @@
 # Configuration management
 PyYAML>=6.0
 
+# External API integration for model classification
+requests>=2.28.0
+
 # Built-in libraries (Python 3.10+):
 # - sqlite3 (database operations)
 # - curses (TUI interface)  
