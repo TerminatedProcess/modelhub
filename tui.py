@@ -30,10 +30,22 @@ class ModelHubTUI:
         self.page_size = config_manager.config.page_size if config_manager.config else 20
         
         # Filter state
-        self.current_filter = None
-        self.search_term = None
+        self.model_filter = ""
+        self.type_filter = ""
+        self.subtype_filter = ""
+        self.non_civitai_filter = False
+        self.active_field = None  # None, 'model', 'type', 'subtype'
         self.sort_by = "filename"
         self.sort_order = "ASC"
+        
+        # Column positions for click detection
+        self.column_positions = {
+            'filename': (0, 50),
+            'primary_type': (50, 62),
+            'sub_type': (62, 77),
+            'triggers': (77, 102),
+            'classification_method': (102, 122)
+        }
         
         # UI state
         self.status_message = ""
@@ -54,8 +66,14 @@ class ModelHubTUI:
             self.draw_screen()
             key = stdscr.getch()
             
+            
             if key == ord('q'):
                 break
+            elif key == curses.KEY_MOUSE:
+                self.handle_mouse()
+            elif self.active_field is not None:
+                # Handle input for active filter field - this takes priority
+                self.handle_filter_input(key)
             elif key == curses.KEY_UP:
                 self.move_selection(-1)
             elif key == curses.KEY_DOWN:
@@ -70,12 +88,12 @@ class ModelHubTUI:
                 self.page_down()
             elif key == ord('d'):
                 self.show_model_details()
-            elif key == ord('f'):
-                self.filter_models()
-            elif key == ord('s'):
-                self.search_models()
+            elif key == ord('F'):  # Shift+F to activate filter
+                self.activate_filter_field('model')
             elif key == ord('r'):
                 self.reset_filters()
+            elif key == ord('n'):
+                self.filter_non_civitai()
             elif key == ord('h'):
                 self.toggle_help()
             elif key == ord('c'):
@@ -97,8 +115,11 @@ class ModelHubTUI:
     
     def setup_curses(self):
         """Initialize curses settings"""
-        curses.curs_set(0)  # Hide cursor
+        curses.curs_set(0)  # Hide cursor initially
         self.height, self.width = self.stdscr.getmaxyx()
+        
+        # Enable mouse support
+        curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
         
         # Initialize color pairs with readable combinations
         if curses.has_colors():
@@ -111,6 +132,7 @@ class ModelHubTUI:
             curses.init_pair(3, curses.COLOR_GREEN, -1)                   # Status - green on default
             curses.init_pair(4, curses.COLOR_YELLOW, -1)                  # Warning - yellow on default
             curses.init_pair(5, curses.COLOR_RED, -1)                     # Error - red on default
+            curses.init_pair(6, curses.COLOR_WHITE, curses.COLOR_BLUE)    # Active field - white on blue
     
     def load_initial_data(self):
         """Load initial data from database"""
@@ -125,14 +147,43 @@ class ModelHubTUI:
     def load_models(self):
         """Load models from database with current filters"""
         try:
-            self.models = self.db.get_models(
-                limit=self.page_size,
-                offset=self.current_page * self.page_size,
-                filter_type=self.current_filter,
-                search_term=self.search_term,
-                sort_by=self.sort_by,
-                sort_order=self.sort_order
-            )
+            # Build search term from filters (case-insensitive)
+            search_terms = []
+            if self.model_filter:
+                search_terms.append(f"LOWER(filename) LIKE '%{self.model_filter}%'")
+            if self.type_filter:
+                search_terms.append(f"LOWER(primary_type) LIKE '%{self.type_filter}%'")
+            if self.subtype_filter:
+                search_terms.append(f"LOWER(sub_type) LIKE '%{self.subtype_filter}%'")
+            if self.non_civitai_filter:
+                search_terms.append(f"classification_method != 'civitai_api'")
+            
+            # Use raw SQL if we have filters, otherwise use existing method
+            if search_terms:
+                query = f"""
+                SELECT id, file_hash, filename, file_size, file_extension,
+                       primary_type, sub_type, confidence, classification_method,
+                       tensor_count, architecture, precision, quantization,
+                       triggers, filename_score, size_score, metadata_score,
+                       tensor_score, classified_at, created_at, updated_at, reclassify
+                FROM models
+                WHERE {' AND '.join(search_terms)}
+                ORDER BY {self.sort_by} {self.sort_order}
+                LIMIT {self.page_size} OFFSET {self.current_page * self.page_size}
+                """
+                
+                cursor = self.db.conn.execute(query)
+                self.models = []
+                for row in cursor.fetchall():
+                    from database import Model
+                    self.models.append(Model(**dict(row)))
+            else:
+                self.models = self.db.get_models(
+                    limit=self.page_size,
+                    offset=self.current_page * self.page_size,
+                    sort_by=self.sort_by,
+                    sort_order=self.sort_order
+                )
         except Exception as e:
             self.status_message = f"Error loading models: {e}"
             self.models = []
@@ -166,23 +217,25 @@ class ModelHubTUI:
     
     def draw_main_screen(self):
         """Draw the main application screen"""
-        # Header
-        header = "ModelHub - AI Model Management"
-        self.stdscr.addstr(0, 0, header[:self.width-1], curses.color_pair(1))
+        # Status info on left side
+        total_models = self.get_total_model_count()
+        filtered_models = len(self.models)
+        status_info = f"Page: {self.current_page + 1} | Total: {total_models} | Showing: {filtered_models}"
+        self.stdscr.addstr(0, 0, status_info[:49])
         
-        # Filter/search info
-        filter_info = f"Filter: {self.current_filter or 'None'} | Search: {self.search_term or 'None'} | Page: {self.current_page + 1}"
-        self.stdscr.addstr(1, 0, filter_info[:self.width-1])
+        
+        # Filter fields on right side
+        self.draw_filter_fields()
         
         # Column headers
-        headers = f"{'Model Name':<50} {'Type':<12} {'Subtype':<12} {'LoraTriggers':<30}"
+        headers = f"{'Model Name':<50} {'Type':<12} {'Subtype':<15} {'LoraTriggers':<25} {'Method':<20}"
         try:
-            self.stdscr.addstr(3, 0, headers[:self.width-1], curses.A_BOLD)
+            self.stdscr.addstr(4, 0, headers[:self.width-1], curses.A_BOLD)
         except curses.error:
             pass
         
         # Model list with scrolling
-        max_display_rows = self.height - 7  # Reserve space for header, help, status
+        max_display_rows = self.height - 8  # Reserve space for header, filters, help, status
         
         for i in range(max_display_rows):
             model_index = self.display_offset + i
@@ -190,16 +243,19 @@ class ModelHubTUI:
                 break
                 
             model = self.models[model_index]
-            y = 4 + i
+            y = 5 + i
             
             try:
                 # Show LoRA triggers only for LoRA models, otherwise blank
                 triggers = ""
                 if model.primary_type and 'lora' in model.primary_type.lower():
                     if model.triggers:
-                        triggers = model.triggers[:30]  # Limit to 30 chars for display
+                        triggers = model.triggers[:25]  # Limit to 25 chars for display
                 
-                line = f"{model.filename[:50]:<50} {model.primary_type:<12} {model.sub_type:<12} {triggers:<30}"
+                # Classification method, shortened for display
+                method = model.classification_method[:20] if model.classification_method else ""
+                
+                line = f"{model.filename[:50]:<50} {model.primary_type:<12} {model.sub_type:<15} {triggers:<25} {method:<20}"
                 
                 attr = curses.color_pair(2) if model_index == self.selected_row else 0
                 self.stdscr.addstr(y, 0, line[:self.width-1], attr)
@@ -207,7 +263,7 @@ class ModelHubTUI:
                 pass
         
         # Help line
-        help_line = "↑/↓ Select | PgUp/PgDn Jump | ←/→ Page | d Details | S Scan | f Filter | s Search | r Reset | h Help | q Quit"
+        help_line = "↑/↓ Select | PgUp/PgDn Jump | Click/F Filter | n Non-CivitAI | r Reset | h Help | q Quit"
         try:
             self.stdscr.addstr(self.height-2, 0, help_line[:self.width-1], curses.color_pair(3))
         except curses.error:
@@ -230,10 +286,14 @@ class ModelHubTUI:
             "  PgUp/PgDn - Jump by page",
             "  ←/→ - Previous/next page",
             "  ENTER or 'd' - Show model details",
+            "  Mouse click - Select model or activate filter",
             "",
-            "Filtering & Search:",
-            "  'f' - Filter by model type",
-            "  's' - Search in filenames/triggers",
+            "Live Filtering:",
+            "  Click on filter fields or press 'F' to start filtering",
+            "  Tab - Move between Model/Type/SubType fields",
+            "  Type to filter instantly (lowercase, partial match)",
+            "  'n' - Toggle non-CivitAI models filter",
+            "  Escape/Enter - Exit filter mode",
             "  'r' - Reset all filters",
             "",
             "Model Management:",
@@ -265,6 +325,60 @@ class ModelHubTUI:
             except curses.error:
                 pass
     
+    def draw_filter_fields(self):
+        """Draw the three filter input fields aligned with Type column"""
+        type_col_start = 50  # Align with Type column
+        field_width = min(25, self.width - type_col_start - 2)
+        
+        # Model filter field (line 0)
+        model_attr = curses.color_pair(6) if self.active_field == 'model' else 0
+        try:
+            self.stdscr.addstr(0, type_col_start, "Model: ")
+            filter_display = self.model_filter[:field_width-1] if self.model_filter else ""
+            field_str = f"{filter_display:<{field_width}}"
+            self.stdscr.addstr(0, type_col_start + 7, field_str, model_attr)
+            if self.active_field == 'model':
+                # Position cursor at end of text
+                cursor_x = type_col_start + 7 + len(filter_display)
+                self.stdscr.move(0, min(cursor_x, self.width-1))
+        except curses.error:
+            pass
+            
+        # Type filter field (line 1)
+        type_attr = curses.color_pair(6) if self.active_field == 'type' else 0
+        try:
+            self.stdscr.addstr(1, type_col_start, "Type:  ")
+            filter_display = self.type_filter[:field_width-1] if self.type_filter else ""
+            field_str = f"{filter_display:<{field_width}}"
+            self.stdscr.addstr(1, type_col_start + 7, field_str, type_attr)
+            if self.active_field == 'type':
+                # Position cursor at end of text
+                cursor_x = type_col_start + 7 + len(filter_display)
+                self.stdscr.move(1, min(cursor_x, self.width-1))
+        except curses.error:
+            pass
+            
+        # SubType filter field (line 2)
+        subtype_attr = curses.color_pair(6) if self.active_field == 'subtype' else 0
+        try:
+            self.stdscr.addstr(2, type_col_start, "Sub:   ")
+            filter_display = self.subtype_filter[:field_width-1] if self.subtype_filter else ""
+            field_str = f"{filter_display:<{field_width}}"
+            self.stdscr.addstr(2, type_col_start + 7, field_str, subtype_attr)
+            if self.active_field == 'subtype':
+                # Position cursor at end of text
+                cursor_x = type_col_start + 7 + len(filter_display)
+                self.stdscr.move(2, min(cursor_x, self.width-1))
+        except curses.error:
+            pass
+    
+    def get_total_model_count(self):
+        """Get total model count without filters"""
+        try:
+            return self.db.get_model_count()
+        except:
+            return 0
+    
     def move_selection(self, direction: int):
         """Move selection up or down with scrolling"""
         new_selection = self.selected_row + direction
@@ -272,7 +386,7 @@ class ModelHubTUI:
             self.selected_row = new_selection
             
             # Adjust display offset for scrolling
-            max_display_rows = self.height - 7
+            max_display_rows = self.height - 8
             
             # Scroll down if selection is below visible area
             if self.selected_row >= self.display_offset + max_display_rows:
@@ -299,7 +413,7 @@ class ModelHubTUI:
     
     def page_up(self):
         """Jump up by visible page size"""
-        max_display_rows = self.height - 7
+        max_display_rows = self.height - 8
         new_selection = max(0, self.selected_row - max_display_rows)
         self.selected_row = new_selection
         
@@ -309,7 +423,7 @@ class ModelHubTUI:
     
     def page_down(self):
         """Jump down by visible page size"""
-        max_display_rows = self.height - 7
+        max_display_rows = self.height - 8
         new_selection = min(len(self.models) - 1, self.selected_row + max_display_rows)
         self.selected_row = new_selection
         
@@ -322,26 +436,143 @@ class ModelHubTUI:
         """Toggle help screen"""
         self.show_help = not self.show_help
     
-    # Filter and search methods
-    def filter_models(self):
-        """Show filter dialog (STUB)"""
-        self.status_message = "Filter functionality - STUB"
-        # TODO: Implement filter dialog
+    def handle_mouse(self):
+        """Handle mouse events"""
+        try:
+            _, mx, my, _, _ = curses.getmouse()
+            
+            
+            # Check if click is on filter fields (aligned with Type column)
+            if my == 0 and mx >= 57:  # Model filter line
+                self.activate_filter_field('model')
+            elif my == 1 and mx >= 57:  # Type filter line
+                self.activate_filter_field('type')
+            elif my == 2 and mx >= 57:  # SubType filter line
+                self.activate_filter_field('subtype')
+            elif my == 4:  # Column headers line
+                self.handle_column_header_click(mx)
+            elif my >= 5:  # Model list area
+                self.deactivate_filter_field()
+                # Calculate which model was clicked
+                list_row = my - 5
+                if list_row < len(self.models):
+                    self.selected_row = self.display_offset + list_row
+        except curses.error:
+            pass
     
-    def search_models(self):
-        """Show search dialog (STUB)"""
-        self.status_message = "Search functionality - STUB"
-        # TODO: Implement search dialog
+    def activate_filter_field(self, field):
+        """Activate a filter field for editing"""
+        self.active_field = field
+        curses.curs_set(1)  # Show cursor
+    
+    def deactivate_filter_field(self):
+        """Deactivate filter field editing"""
+        self.active_field = None
+        curses.curs_set(0)  # Hide cursor
+    
+    def handle_filter_input(self, key):
+        """Handle input for active filter field"""
+        if key == 27:  # Escape
+            self.deactivate_filter_field()
+        elif key == ord('\t'):  # Tab - move to next field
+            if self.active_field == 'model':
+                self.activate_filter_field('type')
+            elif self.active_field == 'type':
+                self.activate_filter_field('subtype')
+            elif self.active_field == 'subtype':
+                self.activate_filter_field('model')
+        elif key == curses.KEY_ENTER or key == ord('\n'):
+            self.deactivate_filter_field()
+        elif key == curses.KEY_BACKSPACE or key == 127 or key == 8:
+            # Backspace
+            if self.active_field == 'model' and self.model_filter:
+                self.model_filter = self.model_filter[:-1]
+                self.apply_filters()
+            elif self.active_field == 'type' and self.type_filter:
+                self.type_filter = self.type_filter[:-1]
+                self.apply_filters()
+            elif self.active_field == 'subtype' and self.subtype_filter:
+                self.subtype_filter = self.subtype_filter[:-1]
+                self.apply_filters()
+        elif 32 <= key <= 126:  # Printable characters
+            char = chr(key).lower()  # Convert to lowercase
+            if self.active_field == 'model':
+                self.model_filter += char
+                self.apply_filters()
+            elif self.active_field == 'type':
+                self.type_filter += char
+                self.apply_filters()
+            elif self.active_field == 'subtype':
+                self.subtype_filter += char
+                self.apply_filters()
+    
+    def apply_filters(self):
+        """Apply current filters and reload models"""
+        self.selected_row = 0
+        self.display_offset = 0
+        self.current_page = 0
+        self.load_models()
+        # Show current filter state
+        filters = []
+        if self.model_filter: filters.append(f"model='{self.model_filter}'")
+        if self.type_filter: filters.append(f"type='{self.type_filter}'")
+        if self.subtype_filter: filters.append(f"sub='{self.subtype_filter}'")
+        if self.non_civitai_filter: filters.append("non-civitai")
+        if filters:
+            self.status_message = f"Filtering: {', '.join(filters)}"
+        else:
+            self.status_message = ""
     
     def reset_filters(self):
         """Reset all filters"""
-        self.current_filter = None
-        self.search_term = None
+        self.model_filter = ""
+        self.type_filter = ""
+        self.subtype_filter = ""
+        self.non_civitai_filter = False
+        self.active_field = None
         self.current_page = 0
         self.selected_row = 0
         self.display_offset = 0
+        curses.curs_set(0)  # Hide cursor
         self.load_models()
         self.status_message = "Filters reset"
+    
+    def filter_non_civitai(self):
+        """Filter to show only non-civitai classified models"""
+        self.non_civitai_filter = not self.non_civitai_filter
+        self.selected_row = 0
+        self.display_offset = 0
+        self.current_page = 0
+        self.load_models()
+    
+    def handle_column_header_click(self, mx):
+        """Handle clicks on column headers for sorting"""
+        # Determine which column was clicked
+        clicked_column = None
+        for column, (start, end) in self.column_positions.items():
+            if start <= mx < end:
+                clicked_column = column
+                break
+        
+        if clicked_column:
+            # If clicking the same column, toggle sort order
+            if self.sort_by == clicked_column:
+                self.sort_order = "DESC" if self.sort_order == "ASC" else "ASC"
+            else:
+                # New column, default to ASC
+                self.sort_by = clicked_column
+                self.sort_order = "ASC"
+            
+            # Reset position and reload
+            self.selected_row = 0
+            self.display_offset = 0
+            self.current_page = 0
+            self.load_models()
+            
+            # Show sort indicator in status
+            direction = "↑" if self.sort_order == "ASC" else "↓"
+            column_name = clicked_column.replace('_', ' ').title()
+            self.status_message = f"Sorted by {column_name} {direction}"
     
     # Model operations (STUBS)
     def show_model_details(self):
