@@ -38,6 +38,7 @@ class Model:
     created_at: str
     updated_at: str
     reclassify: str
+    deleted: bool
 
 @dataclass
 class DeployTarget:
@@ -124,6 +125,9 @@ class ModelHubDB:
                                             
                     -- Reclassification flag
                     reclassify TEXT DEFAULT '',
+                    
+                    -- Soft delete flag
+                    deleted BOOLEAN DEFAULT FALSE,
                     
                     filename TEXT NOT NULL,
                     file_size INTEGER NOT NULL,
@@ -287,6 +291,18 @@ class ModelHubDB:
             cursor.execute("CREATE INDEX idx_sub_type_rules_primary ON sub_type_rules (primary_type)")
             cursor.execute("CREATE INDEX idx_architecture_patterns_arch ON architecture_patterns (architecture)")
             cursor.execute("CREATE INDEX idx_external_apis_priority ON external_apis (priority)")
+            
+            # Create view for active (non-deleted) models
+            cursor.execute("""
+                CREATE VIEW active_models AS
+                SELECT id, file_hash, filename, file_size, file_extension,
+                       primary_type, sub_type, confidence, classification_method,
+                       tensor_count, architecture, precision, quantization,
+                       triggers, filename_score, size_score, metadata_score,
+                       tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+                FROM models 
+                WHERE deleted = FALSE
+            """)
             
             conn.commit()
             print("✓ Created database tables and indexes")
@@ -496,8 +512,8 @@ class ModelHubDB:
                primary_type, sub_type, confidence, classification_method,
                tensor_count, architecture, precision, quantization,
                triggers, filename_score, size_score, metadata_score,
-               tensor_score, classified_at, created_at, updated_at, reclassify
-        FROM models
+               tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+        FROM active_models
         """
         
         params = []
@@ -528,7 +544,7 @@ class ModelHubDB:
     def get_model_count(self, filter_type: Optional[str] = None, 
                        search_term: Optional[str] = None) -> int:
         """Get total count of models with filters"""
-        query = "SELECT COUNT(*) FROM models"
+        query = "SELECT COUNT(*) FROM active_models"
         params = []
         conditions = []
         
@@ -550,7 +566,7 @@ class ModelHubDB:
         """Get model types with counts"""
         cursor = self.conn.execute("""
             SELECT primary_type, COUNT(*) as count 
-            FROM models 
+            FROM active_models 
             GROUP BY primary_type 
             ORDER BY count DESC
         """)
@@ -563,8 +579,8 @@ class ModelHubDB:
                    primary_type, sub_type, confidence, classification_method,
                    tensor_count, architecture, precision, quantization,
                    triggers, filename_score, size_score, metadata_score,
-                   tensor_score, classified_at, created_at, updated_at, reclassify
-            FROM models WHERE id = ?
+                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+            FROM active_models WHERE id = ?
         """, (model_id,))
         
         row = cursor.fetchone()
@@ -734,11 +750,23 @@ class ModelHubDB:
         # Calculate file hash
         file_hash = self.calculate_file_hash(file_path)
         
-        # Check if model already exists
+        # Check if model already exists (including deleted ones)
         existing_model = self.get_model_by_hash(file_hash)
         if existing_model:
-            if not quiet:
-                print(f"Model already exists: {existing_model.filename}")
+            # If model was deleted, undelete it
+            if existing_model.deleted:
+                if not quiet:
+                    print(f"Undeleting model: {existing_model.filename}")
+                self.conn.execute(
+                    "UPDATE models SET deleted = FALSE WHERE file_hash = ?",
+                    (file_hash,)
+                )
+                self.conn.commit()
+                # Get updated model record
+                existing_model = self.get_model_by_hash(file_hash)
+            else:
+                if not quiet:
+                    print(f"Model already exists: {existing_model.filename}")
             
             # Even for existing models, we still need to handle symlink conversion
             # Load config for symlink settings
@@ -887,7 +915,7 @@ class ModelHubDB:
                    primary_type, sub_type, confidence, classification_method,
                    tensor_count, architecture, precision, quantization,
                    triggers, filename_score, size_score, metadata_score,
-                   tensor_score, classified_at, created_at, updated_at, reclassify
+                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted
             FROM models WHERE file_hash = ?
         """, (file_hash,))
         

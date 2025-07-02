@@ -810,9 +810,34 @@ class ModelHubTUI:
             self.copy_filenames_list()
     
     def deploy_packages(self):
-        """Deploy packages functionality (STUB)"""
-        self.status_message = "Deploy packages functionality - STUB"
-        # TODO: Implement package deployment
+        """Deploy models to organized directories under model-hub/deploy/"""
+        if not self.models:
+            self.status_message = "No models to deploy"
+            return
+        
+        try:
+            # Get available deploy targets from database
+            deploy_targets = self.db.get_deploy_targets()
+            if not deploy_targets:
+                self.status_message = "No deploy targets configured"
+                return
+            
+            # Filter enabled targets
+            enabled_targets = [target for target in deploy_targets if target.enabled]
+            if not enabled_targets:
+                self.status_message = "No deploy targets are enabled"
+                return
+            
+            # Show deployment target selection popup
+            selected_target = self.show_deploy_target_popup(enabled_targets)
+            if selected_target is None:
+                return  # User cancelled
+            
+            # Deploy to selected target
+            self.deploy_to_target_package(selected_target)
+            
+        except Exception as e:
+            self.status_message = f"Deployment failed: {e}"
     
     def generate_symlinks_for_current_models(self):
         """Generate symbolic link commands for all current filtered models"""
@@ -1212,15 +1237,231 @@ class ModelHubTUI:
     
     
     def delete_single_model(self, model: Model):
-        """Delete a single model (record and file) - STUB"""
-        self.status_message = f"Delete {model.filename} - STUB"
-        # TODO: Implement single model deletion
+        """Soft delete a single model with confirmation"""
+        # Show confirmation dialog
+        if not self.show_delete_confirmation(f"Delete model: {model.filename}?"):
+            return
+        
+        try:
+            # Soft delete by setting deleted = TRUE
+            self.db.conn.execute(
+                "UPDATE models SET deleted = TRUE WHERE id = ?",
+                (model.id,)
+            )
+            self.db.conn.commit()
+            
+            # Reload models to remove deleted model from list
+            self.load_models()
+            
+            self.status_message = f"Deleted {model.filename} (soft delete - use Shift-C cleanup to permanently remove)"
+            
+        except Exception as e:
+            self.status_message = f"Error deleting {model.filename}: {e}"
     
     def delete_models(self):
-        """Delete selected models (STUB)"""
-        self.status_message = "Delete functionality - STUB"
-        # TODO: Implement model deletion
+        """Soft delete all filtered models with confirmation"""
+        if not self.models:
+            self.status_message = "No models to delete"
+            return
+        
+        # Show confirmation dialog
+        count = len(self.models)
+        if not self.show_delete_confirmation(f"Delete {count} filtered models?"):
+            return
+        
+        try:
+            # Soft delete all current models by setting deleted = TRUE
+            model_ids = [model.id for model in self.models]
+            placeholders = ','.join(['?' for _ in model_ids])
+            
+            self.db.conn.execute(
+                f"UPDATE models SET deleted = TRUE WHERE id IN ({placeholders})",
+                model_ids
+            )
+            self.db.conn.commit()
+            
+            # Reload models to remove deleted models from list
+            self.load_models()
+            
+            self.status_message = f"Deleted {count} models (soft delete - use Shift-C cleanup to permanently remove)"
+            
+        except Exception as e:
+            self.status_message = f"Error deleting models: {e}"
     
+    def show_delete_confirmation(self, message):
+        """Show confirmation dialog for delete operations"""
+        popup_height = 7
+        popup_width = max(len(message) + 10, 50)
+        popup_y = self.height // 2 - popup_height // 2
+        popup_x = self.width // 2 - popup_width // 2
+        
+        popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
+        popup_win.box()
+        
+        # Show warning title
+        title = " ⚠ CONFIRM DELETE ⚠ "
+        popup_win.addstr(0, 2, title, curses.A_BOLD | curses.color_pair(1))
+        
+        # Show message
+        popup_win.addstr(2, 3, message[:popup_width-6])
+        
+        # Show options
+        popup_win.addstr(4, 3, "Press 'y' to confirm, any other key to cancel")
+        
+        popup_win.refresh()
+        
+        # Get user input
+        key = self.stdscr.getch()
+        del popup_win
+        
+        return key == ord('y') or key == ord('Y')
+    
+    def show_deploy_target_popup(self, enabled_targets):
+        """Show popup to select deployment target"""
+        popup_height = min(len(enabled_targets) + 5, 15)
+        popup_width = 60
+        popup_y = self.height // 2 - popup_height // 2
+        popup_x = self.width // 2 - popup_width // 2
+        
+        popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
+        popup_win.box()
+        
+        # Show title
+        title = " Select Deployment Target "
+        popup_win.addstr(0, 2, title, curses.A_BOLD)
+        
+        selected_option = 0
+        
+        while True:
+            # Clear content area
+            for i in range(1, popup_height - 1):
+                popup_win.addstr(i, 1, " " * (popup_width - 2))
+            
+            # Draw options
+            for i, target in enumerate(enabled_targets):
+                y = 2 + i
+                attr = curses.color_pair(2) if i == selected_option else 0
+                display_name = target.display_name[:50]  # Truncate if too long
+                popup_win.addstr(y, 3, f"{display_name}", attr)
+            
+            popup_win.refresh()
+            
+            # Handle input
+            key = self.stdscr.getch()
+            
+            if key == curses.KEY_UP and selected_option > 0:
+                selected_option -= 1
+            elif key == curses.KEY_DOWN and selected_option < len(enabled_targets) - 1:
+                selected_option += 1
+            elif key == ord('\n') or key == curses.KEY_ENTER:
+                del popup_win
+                return enabled_targets[selected_option]
+            elif key == 27 or key == ord('q'):  # Escape or 'q'
+                del popup_win
+                return None
+    
+    def deploy_to_target_package(self, target):
+        """Deploy models to a specific target under model-hub/deploy/"""
+        import shutil
+        from pathlib import Path
+        
+        try:
+            # Get model hub path
+            model_hub_path = self.config.get_model_hub_path()
+            
+            # Create deployment directory structure: model-hub/deploy/target_name/
+            deploy_base = model_hub_path / 'deploy' / target.name
+            
+            # Remove existing deployment directory and recreate fresh
+            if deploy_base.exists():
+                shutil.rmtree(deploy_base)
+            
+            # Create fresh deployment directory
+            deploy_base.mkdir(parents=True, exist_ok=True)
+            
+            # Get deploy mappings for this target
+            mappings = self.db.get_deploy_mappings(target.id)
+            if not mappings:
+                self.status_message = f"No deploy mappings configured for {target.display_name}"
+                return
+            
+            # Create directories for each mapping
+            created_dirs = set()
+            for mapping in mappings:
+                dir_path = deploy_base / mapping.folder_path
+                dir_path.mkdir(parents=True, exist_ok=True)
+                created_dirs.add(mapping.folder_path)
+            
+            # Always create unknown directory
+            unknown_dir = deploy_base / 'unknown'
+            unknown_dir.mkdir(parents=True, exist_ok=True)
+            created_dirs.add('unknown')
+            
+            # Build mapping dictionary for quick lookup
+            type_to_folder = {}
+            for mapping in mappings:
+                type_to_folder[mapping.model_type] = mapping.folder_path
+            
+            # Deploy models
+            deployed_count = 0
+            skipped_count = 0
+            error_count = 0
+            skipped_models = []
+            
+            for model in self.models:
+                try:
+                    # Get the actual model file path in the hub
+                    hub_model_path = model_hub_path / "models" / model.file_hash / model.filename
+                    
+                    # Check if model file exists in hub
+                    if not hub_model_path.exists():
+                        reason = "file not found in hub"
+                        skipped_models.append((model.filename, reason))
+                        skipped_count += 1
+                        continue
+                    
+                    # Determine target directory
+                    if model.primary_type in type_to_folder:
+                        relative_dir = type_to_folder[model.primary_type]
+                    elif model.primary_type == 'unknown' or model.primary_type is None:
+                        relative_dir = 'unknown'
+                    else:
+                        # Skip unsupported model types
+                        reason = f"no mapping for {model.primary_type}"
+                        skipped_models.append((model.filename, reason))
+                        skipped_count += 1
+                        continue
+                    
+                    target_dir = deploy_base / relative_dir
+                    
+                    # Create symlink
+                    symlink_path = target_dir / model.filename
+                    
+                    # Remove existing symlink if it exists
+                    if symlink_path.exists() or symlink_path.is_symlink():
+                        symlink_path.unlink()
+                    
+                    # Create new symlink to the hub model path
+                    symlink_path.symlink_to(hub_model_path)
+                    deployed_count += 1
+                    
+                except Exception as e:
+                    reason = f"deployment error: {e}"
+                    skipped_models.append((model.filename, reason))
+                    error_count += 1
+            
+            # Set status message with summary
+            status_parts = [f"Deployed {deployed_count} models to {target.display_name}"]
+            if skipped_count > 0:
+                status_parts.append(f"skipped {skipped_count}")
+            if error_count > 0:
+                status_parts.append(f"errors {error_count}")
+            
+            self.status_message = " | ".join(status_parts) + f" -> {deploy_base}"
+            
+        except Exception as e:
+            self.status_message = f"Deployment to {target.display_name} failed: {e}"
+
     # Deploy operations (STUBS)
     def configure_deploy(self):
         """Configure deployment targets (STUB)"""
