@@ -301,7 +301,7 @@ class ModelHubDB:
                        triggers, filename_score, size_score, metadata_score,
                        tensor_score, classified_at, created_at, updated_at, reclassify, deleted
                 FROM models 
-                WHERE deleted = FALSE
+                WHERE deleted = 0
             """)
             
             conn.commit()
@@ -758,7 +758,7 @@ class ModelHubDB:
                 if not quiet:
                     print(f"Undeleting model: {existing_model.filename}")
                 self.conn.execute(
-                    "UPDATE models SET deleted = FALSE WHERE file_hash = ?",
+                    "UPDATE models SET deleted = 0 WHERE file_hash = ?",
                     (file_hash,)
                 )
                 self.conn.commit()

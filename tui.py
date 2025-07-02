@@ -165,8 +165,8 @@ class ModelHubTUI:
                        primary_type, sub_type, confidence, classification_method,
                        tensor_count, architecture, precision, quantization,
                        triggers, filename_score, size_score, metadata_score,
-                       tensor_score, classified_at, created_at, updated_at, reclassify
-                FROM models
+                       tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+                FROM active_models
                 WHERE {' AND '.join(search_terms)}
                 ORDER BY {self.get_sort_expression()} {self.sort_order}
                 LIMIT {self.page_size} OFFSET {self.current_page * self.page_size}
@@ -184,8 +184,8 @@ class ModelHubTUI:
                        primary_type, sub_type, confidence, classification_method,
                        tensor_count, architecture, precision, quantization,
                        triggers, filename_score, size_score, metadata_score,
-                       tensor_score, classified_at, created_at, updated_at, reclassify
-                FROM models
+                       tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+                FROM active_models
                 ORDER BY {self.get_sort_expression()} {self.sort_order}
                 LIMIT {self.page_size} OFFSET {self.current_page * self.page_size}
                 """
@@ -1059,7 +1059,7 @@ class ModelHubTUI:
                    tensor_count, architecture, precision, quantization,
                    triggers, filename_score, size_score, metadata_score,
                    tensor_score, classified_at, created_at, updated_at, reclassify
-            FROM models
+            FROM active_models
             {where_clause}
             ORDER BY filename ASC
             """
@@ -1243,9 +1243,9 @@ class ModelHubTUI:
             return
         
         try:
-            # Soft delete by setting deleted = TRUE
+            # Soft delete by setting deleted = 1
             self.db.conn.execute(
-                "UPDATE models SET deleted = TRUE WHERE id = ?",
+                "UPDATE models SET deleted = 1 WHERE id = ?",
                 (model.id,)
             )
             self.db.conn.commit()
@@ -1270,12 +1270,12 @@ class ModelHubTUI:
             return
         
         try:
-            # Soft delete all current models by setting deleted = TRUE
+            # Soft delete all current models by setting deleted = 1
             model_ids = [model.id for model in self.models]
             placeholders = ','.join(['?' for _ in model_ids])
             
             self.db.conn.execute(
-                f"UPDATE models SET deleted = TRUE WHERE id IN ({placeholders})",
+                f"UPDATE models SET deleted = 1 WHERE id IN ({placeholders})",
                 model_ids
             )
             self.db.conn.commit()
