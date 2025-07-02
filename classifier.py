@@ -305,6 +305,7 @@ class CivitAILookup:
         """Extract base model from CivitAI data"""
         base_model = version_info.get('baseModel', '').lower()
         
+        # Check base model field first
         if 'flux' in base_model:
             return 'flux'
         elif 'sdxl' in base_model or 'xl' in base_model:
@@ -315,7 +316,10 @@ class CivitAILookup:
             return 'sd15'
         elif 'sd 2' in base_model or 'sd2' in base_model:
             return 'sd2'
+        elif 'wan' in base_model or 'video' in base_model:
+            return 'wan'
         
+        # Check model name for additional patterns
         name = model_info.get('name', '').lower()
         if 'flux' in name:
             return 'flux'
@@ -323,6 +327,14 @@ class CivitAILookup:
             return 'sdxl'
         elif 'sd3' in name:
             return 'sd3'
+        elif 'wan' in name or 'wanvideo' in name:
+            return 'wan'
+        elif 'hunyuan' in name:
+            return 'hunyuan'
+        elif 'ltx' in name or 'ltxv' in name:
+            return 'ltxv'
+        elif 'video' in name and any(v in name for v in ['lora', 'model']):
+            return 'video'
         
         return base_model or 'unknown'
     
@@ -755,8 +767,22 @@ class ModelClassifier:
                 return 'sdxl_lora'
             elif base_model == 'sd15':
                 return 'sd15_lora'
+            elif base_model == 'wan':
+                return 'wan_lora'
+            elif base_model == 'hunyuan':
+                return 'hunyuan_lora'
+            elif base_model == 'ltxv':
+                return 'ltxv_lora'
+            elif base_model == 'video':
+                return 'video_lora'
             elif 'pony' in filename_lower:
                 return 'pony_lora'
+            elif 'wan' in filename_lower:
+                return 'wan_lora'
+            elif 'hunyuan' in filename_lower:
+                return 'hunyuan_lora'
+            elif 'ltx' in filename_lower:
+                return 'ltxv_lora'
             elif 'video' in filename_lower:
                 return 'video_lora'
             else:

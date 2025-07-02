@@ -128,7 +128,7 @@ class ModelHubTUI:
             
             # Color pairs: (foreground, background)
             curses.init_pair(1, curses.COLOR_YELLOW, curses.COLOR_BLUE)   # Header - yellow on blue
-            curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN)    # Selected - black on cyan
+            curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_GREEN)   # Selected - white on green
             curses.init_pair(3, curses.COLOR_GREEN, -1)                   # Status - green on default
             curses.init_pair(4, curses.COLOR_YELLOW, -1)                  # Warning - yellow on default
             curses.init_pair(5, curses.COLOR_RED, -1)                     # Error - red on default
@@ -160,14 +160,16 @@ class ModelHubTUI:
             
             # Use raw SQL if we have filters, otherwise use existing method
             if search_terms:
+                # Always exclude deleted records
+                all_conditions = ['deleted = 0'] + search_terms
                 query = f"""
                 SELECT id, file_hash, filename, file_size, file_extension,
                        primary_type, sub_type, confidence, classification_method,
                        tensor_count, architecture, precision, quantization,
                        triggers, filename_score, size_score, metadata_score,
                        tensor_score, classified_at, created_at, updated_at, reclassify, deleted
-                FROM active_models
-                WHERE {' AND '.join(search_terms)}
+                FROM models
+                WHERE {' AND '.join(all_conditions)}
                 ORDER BY {self.get_sort_expression()} {self.sort_order}
                 LIMIT {self.page_size} OFFSET {self.current_page * self.page_size}
                 """
@@ -185,7 +187,8 @@ class ModelHubTUI:
                        tensor_count, architecture, precision, quantization,
                        triggers, filename_score, size_score, metadata_score,
                        tensor_score, classified_at, created_at, updated_at, reclassify, deleted
-                FROM active_models
+                FROM models
+                WHERE deleted = 0
                 ORDER BY {self.get_sort_expression()} {self.sort_order}
                 LIMIT {self.page_size} OFFSET {self.current_page * self.page_size}
                 """
@@ -700,9 +703,157 @@ class ModelHubTUI:
         if not model:
             self.status_message = "No model selected"
             return
+        
+        # Create scrollable details window
+        popup_height = min(self.height - 4, 30)
+        popup_width = min(self.width - 4, 100)
+        popup_y = 2
+        popup_x = (self.width - popup_width) // 2
+        
+        popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
+        popup_win.box()
+        
+        # Show title
+        title = f" Model Details: {model.filename[:40]} "
+        popup_win.addstr(0, 2, title, curses.A_BOLD)
+        
+        # Build details content
+        details = self.build_model_details(model)
+        
+        # Scrolling state
+        scroll_offset = 0
+        max_content_lines = popup_height - 3  # Account for box and title
+        
+        while True:
+            # Clear content area
+            for i in range(1, popup_height - 1):
+                popup_win.addstr(i, 1, " " * (popup_width - 2))
             
-        self.status_message = f"Show details for: {model.filename} - STUB"
-        # TODO: Implement model details dialog
+            # Display details with scrolling
+            for i in range(max_content_lines):
+                line_index = scroll_offset + i
+                if line_index >= len(details):
+                    break
+                
+                line = details[line_index][:popup_width-4]  # Truncate if too long
+                try:
+                    popup_win.addstr(i + 1, 2, line)
+                except curses.error:
+                    pass
+            
+            # Show scroll indicator if needed
+            if len(details) > max_content_lines:
+                total_lines = len(details)
+                visible_end = min(scroll_offset + max_content_lines, total_lines)
+                scroll_info = f" [{scroll_offset+1}-{visible_end}/{total_lines}] ↑/↓ Scroll | ESC/q Close "
+                try:
+                    popup_win.addstr(popup_height-1, 2, scroll_info[:popup_width-4])
+                except curses.error:
+                    pass
+            else:
+                try:
+                    popup_win.addstr(popup_height-1, 2, " Press ESC or 'q' to close ")
+                except curses.error:
+                    pass
+            
+            popup_win.refresh()
+            
+            # Handle input
+            key = self.stdscr.getch()
+            
+            if key == curses.KEY_UP and scroll_offset > 0:
+                scroll_offset -= 1
+            elif key == curses.KEY_DOWN and scroll_offset + max_content_lines < len(details):
+                scroll_offset += 1
+            elif key == curses.KEY_PPAGE and scroll_offset > 0:  # Page Up
+                scroll_offset = max(0, scroll_offset - max_content_lines)
+            elif key == curses.KEY_NPAGE:  # Page Down
+                scroll_offset = min(len(details) - max_content_lines, scroll_offset + max_content_lines)
+            elif key == 27 or key == ord('q'):  # Escape or 'q'
+                break
+        
+        del popup_win
+        self.status_message = f"Viewed details for: {model.filename}"
+    
+    def build_model_details(self, model: Model) -> List[str]:
+        """Build comprehensive model details as list of strings"""
+        details = []
+        
+        # Basic Information
+        details.append("═══ BASIC INFORMATION ═══")
+        details.append(f"ID: {model.id}")
+        details.append(f"Filename: {model.filename}")
+        details.append(f"File Size: {model.file_size:,} bytes ({model.file_size / (1024*1024):.1f} MB)")
+        details.append(f"Extension: {model.file_extension}")
+        details.append(f"Hash: {model.file_hash}")
+        details.append("")
+        
+        # Model Hub Path
+        model_hub_path = self.config.get_model_hub_path()
+        storage_path = model_hub_path / "models" / model.file_hash / model.filename
+        details.append("═══ STORAGE LOCATION ═══")
+        details.append(f"Hub Path: {storage_path}")
+        details.append("")
+        
+        # Classification Results
+        details.append("═══ CLASSIFICATION ═══")
+        details.append(f"Primary Type: {model.primary_type}")
+        details.append(f"Sub Type: {model.sub_type}")
+        details.append(f"Confidence: {model.confidence:.3f}")
+        details.append(f"Method: {model.classification_method}")
+        details.append(f"Architecture: {model.architecture or 'Unknown'}")
+        details.append("")
+        
+        # Technical Details
+        details.append("═══ TECHNICAL DETAILS ═══")
+        details.append(f"Tensor Count: {model.tensor_count or 'Unknown'}")
+        details.append(f"Precision: {model.precision or 'Unknown'}")
+        details.append(f"Quantization: {model.quantization or 'Unknown'}")
+        details.append("")
+        
+        # Classification Scores
+        details.append("═══ CLASSIFICATION SCORES ═══")
+        details.append(f"Filename Score: {model.filename_score:.3f}")
+        details.append(f"Size Score: {model.size_score:.3f}")
+        details.append(f"Metadata Score: {model.metadata_score:.3f}")
+        details.append(f"Tensor Score: {model.tensor_score:.3f}")
+        details.append("")
+        
+        # Triggers (if LoRA)
+        if model.triggers and 'lora' in model.primary_type.lower():
+            details.append("═══ TRIGGER WORDS ═══")
+            triggers = model.triggers.split(", ") if model.triggers else []
+            for i, trigger in enumerate(triggers, 1):
+                details.append(f"{i:2d}. {trigger}")
+            details.append("")
+        
+        # Timestamps
+        details.append("═══ TIMESTAMPS ═══")
+        details.append(f"Classified: {model.classified_at}")
+        details.append(f"Created: {model.created_at}")
+        details.append(f"Updated: {model.updated_at}")
+        details.append("")
+        
+        # Status Flags
+        details.append("═══ STATUS FLAGS ═══")
+        details.append(f"Reclassify Flag: {model.reclassify or 'None'}")
+        details.append(f"Deleted: {'Yes' if model.deleted else 'No'}")
+        details.append("")
+        
+        # Additional Metadata (if available)
+        try:
+            metadata_rows = self.db.get_model_metadata(model.id)
+            if metadata_rows:
+                details.append("═══ ADDITIONAL METADATA ═══")
+                for key, value in metadata_rows[:20]:  # Limit to first 20 entries
+                    details.append(f"{key}: {value[:100]}...")  # Truncate long values
+                if len(metadata_rows) > 20:
+                    details.append(f"... and {len(metadata_rows) - 20} more entries")
+                details.append("")
+        except Exception:
+            pass
+        
+        return details
     
     def copy_model_triggers(self, model: Model):
         """Copy LoRA model triggers to clipboard"""
@@ -1016,7 +1167,7 @@ class ModelHubTUI:
             reclassify_civitai = raw_config.get('classification', {}).get('reclassify_civitai_models', False)
             
             # Build filter conditions based on current UI filters
-            filter_conditions = []
+            filter_conditions = ["deleted = 0"]  # Always exclude deleted records
             if self.model_filter:
                 filter_conditions.append(f"LOWER(filename) LIKE '%{self.model_filter}%'")
             if self.type_filter:
@@ -1030,10 +1181,8 @@ class ModelHubTUI:
             if not reclassify_civitai:
                 filter_conditions.append("classification_method != 'civitai_api'")
             
-            # Build where clause
-            where_clause = ""
-            if filter_conditions:
-                where_clause = "WHERE " + " AND ".join(filter_conditions)
+            # Build where clause (always has conditions now due to deleted = 0)
+            where_clause = "WHERE " + " AND ".join(filter_conditions)
             
             # Show what will be reclassified
             filter_desc = []
@@ -1058,8 +1207,8 @@ class ModelHubTUI:
                    primary_type, sub_type, confidence, classification_method,
                    tensor_count, architecture, precision, quantization,
                    triggers, filename_score, size_score, metadata_score,
-                   tensor_score, classified_at, created_at, updated_at, reclassify
-            FROM active_models
+                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+            FROM models
             {where_clause}
             ORDER BY filename ASC
             """
