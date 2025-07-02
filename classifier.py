@@ -35,6 +35,9 @@ class ClassificationResult:
     size_score: float = 0.0
     metadata_score: float = 0.0
     tensor_score: float = 0.0
+    
+    # Raw metadata for storage
+    raw_metadata: Optional[Dict[str, Any]] = None
 
 class SafeTensorsExtractor:
     """Extract metadata from SafeTensors files"""
@@ -465,7 +468,8 @@ class ModelClassifier:
             if not quiet:
                 print(f"    CivitAI: {civitai_result.get('name', 'Unknown')} ({primary_type})")
             
-            return ClassificationResult(
+            # Store raw CivitAI data for later metadata storage
+            classification_result = ClassificationResult(
                 primary_type=primary_type,
                 sub_type=sub_type,
                 confidence=civitai_result['confidence'],
@@ -473,6 +477,8 @@ class ModelClassifier:
                 base_model=base_model,
                 triggers=civitai_result.get('triggers', [])
             )
+            classification_result.raw_metadata = {'civitai_response': civitai_result}
+            return classification_result
         
         # STEP 4: SafeTensors metadata analysis
         if file_path.suffix.lower() == '.safetensors':
@@ -539,7 +545,15 @@ class ModelClassifier:
             if triggers:
                 print(f"    Triggers: {', '.join(triggers)}")
         
-        return ClassificationResult(
+        # Prepare raw metadata for storage
+        raw_metadata = {
+            'safetensors_metadata': st_metadata,
+            'tensor_names': tensor_names,
+            'tensor_scores': tensor_scores,
+            'file_size': file_path.stat().st_size
+        }
+        
+        classification_result = ClassificationResult(
             primary_type=primary_type,
             sub_type=sub_type,
             confidence=final_confidence,
@@ -552,6 +566,8 @@ class ModelClassifier:
             metadata_score=metadata_score,
             tensor_score=tensor_score
         )
+        classification_result.raw_metadata = raw_metadata
+        return classification_result
     
     def classify_gguf(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
         """Classify GGUF files"""
@@ -579,13 +595,21 @@ class ModelClassifier:
         
         confidence = 0.9  # High confidence for GGUF detection
         
-        return ClassificationResult(
+        # Prepare raw metadata for storage
+        raw_metadata = {
+            'gguf_metadata': metadata,
+            'file_size': file_size
+        }
+        
+        classification_result = ClassificationResult(
             primary_type=primary_type,
             sub_type=sub_type,
             confidence=confidence,
             method="gguf_classification",
             tensor_count=tensor_count
         )
+        classification_result.raw_metadata = raw_metadata
+        return classification_result
     
     def classify_by_size(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
         """Classify model by file size as fallback"""
@@ -603,7 +627,14 @@ class ModelClassifier:
         if not quiet:
             print(f"    Size-based: {primary_type} (confidence: {combined_confidence:.2f})")
         
-        return ClassificationResult(
+        # Prepare raw metadata for storage
+        raw_metadata = {
+            'file_size': file_size,
+            'filename': file_path.name,
+            'file_extension': file_path.suffix
+        }
+        
+        classification_result = ClassificationResult(
             primary_type=primary_type,
             sub_type=sub_type,
             confidence=combined_confidence,
@@ -611,6 +642,8 @@ class ModelClassifier:
             size_score=confidence,
             filename_score=filename_score
         )
+        classification_result.raw_metadata = raw_metadata
+        return classification_result
     
     def classify_by_size_only(self, file_size: int) -> Tuple[str, float]:
         """Get type and confidence based on file size only"""

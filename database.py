@@ -8,6 +8,7 @@ import sqlite3
 import os
 import hashlib
 import shutil
+import json
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass
@@ -587,6 +588,44 @@ class ModelHubDB:
         """, (model_id,))
         return cursor.fetchall()
     
+    def store_model_metadata(self, model_id: int, metadata_dict: Dict[str, Any]):
+        """Store metadata key-value pairs for a model"""
+        # Clear existing metadata for this model
+        self.conn.execute("DELETE FROM model_metadata WHERE model_id = ?", (model_id,))
+        
+        # Insert new metadata
+        for key, value in metadata_dict.items():
+            # Convert value to JSON string if it's not already a string
+            if isinstance(value, (dict, list)):
+                value_str = json.dumps(value)
+            else:
+                value_str = str(value)
+            
+            # Determine metadata type from key
+            metadata_type = 'extracted'  # Default type
+            if 'civitai' in key.lower():
+                metadata_type = 'civitai'
+            elif 'safetensors' in key.lower():
+                metadata_type = 'safetensors'
+            elif 'gguf' in key.lower():
+                metadata_type = 'gguf'
+            elif 'tensor' in key.lower():
+                metadata_type = 'tensor_analysis'
+            elif 'file' in key.lower():
+                metadata_type = 'file_info'
+            
+            self.conn.execute("""
+                INSERT INTO model_metadata (model_id, metadata_type, key, value)
+                VALUES (?, ?, ?, ?)
+            """, (model_id, metadata_type, key, value_str))
+        
+        self.conn.commit()
+    
+    def get_model_metadata_dict(self, model_id: int) -> Dict[str, str]:
+        """Get metadata as a dictionary for a specific model"""
+        metadata_pairs = self.get_model_metadata(model_id)
+        return {key: value for key, value in metadata_pairs}
+    
     # Deploy operations
     def get_deploy_targets(self) -> List[DeployTarget]:
         """Get all deploy targets"""
@@ -873,6 +912,16 @@ class ModelHubDB:
         
         model_id = cursor.lastrowid
         self.conn.commit()
+        
+        # Store raw metadata if available
+        if hasattr(classification, 'raw_metadata') and classification.raw_metadata:
+            try:
+                self.store_model_metadata(model_id, classification.raw_metadata)
+                if not quiet:
+                    print(f"    📊 Stored metadata ({len(classification.raw_metadata)} entries)")
+            except Exception as e:
+                if not quiet:
+                    print(f"    ⚠️  Warning: Failed to store metadata: {e}")
         
         # Replace original file with symlink (only if not preserving originals)
         if not preserve_originals:

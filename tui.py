@@ -697,83 +697,87 @@ class ModelHubTUI:
     
     def show_model_details(self, model: Model = None):
         """Show detailed model information"""
-        if not model and self.models and self.selected_row < len(self.models):
-            model = self.models[self.selected_row]
-        
-        if not model:
-            self.status_message = "No model selected"
-            return
-        
-        # Create scrollable details window
-        popup_height = min(self.height - 4, 30)
-        popup_width = min(self.width - 4, 100)
-        popup_y = 2
-        popup_x = (self.width - popup_width) // 2
-        
-        popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
-        popup_win.box()
-        
-        # Show title
-        title = f" Model Details: {model.filename[:40]} "
-        popup_win.addstr(0, 2, title, curses.A_BOLD)
-        
-        # Build details content
-        details = self.build_model_details(model)
-        
-        # Scrolling state
-        scroll_offset = 0
-        max_content_lines = popup_height - 3  # Account for box and title
-        
-        while True:
-            # Clear content area
-            for i in range(1, popup_height - 1):
-                popup_win.addstr(i, 1, " " * (popup_width - 2))
+        try:
+            if not model and self.models and self.selected_row < len(self.models):
+                model = self.models[self.selected_row]
             
-            # Display details with scrolling
-            for i in range(max_content_lines):
-                line_index = scroll_offset + i
-                if line_index >= len(details):
-                    break
+            if not model:
+                self.status_message = "No model selected"
+                return
+            
+            # Create scrollable details window (use most of the screen)
+            popup_height = self.height - 2  # Leave just 1 line top and bottom
+            popup_width = min(self.width - 4, 120)
+            popup_y = 1
+            popup_x = (self.width - popup_width) // 2
+            
+            popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
+            popup_win.box()
+            
+            # Show title
+            title = f" Model Details: {model.filename[:40]} "
+            popup_win.addstr(0, 2, title, curses.A_BOLD)
+            
+            # Build details content
+            details = self.build_model_details(model)
+            
+            # Scrolling state
+            scroll_offset = 0
+            max_content_lines = popup_height - 3  # Account for box and title
+            
+            while True:
+                # Clear content area
+                for i in range(1, popup_height - 1):
+                    popup_win.addstr(i, 1, " " * (popup_width - 2))
                 
-                line = details[line_index][:popup_width-4]  # Truncate if too long
-                try:
-                    popup_win.addstr(i + 1, 2, line)
-                except curses.error:
-                    pass
+                # Display details with scrolling
+                for i in range(max_content_lines):
+                    line_index = scroll_offset + i
+                    if line_index >= len(details):
+                        break
+                    
+                    line = details[line_index][:popup_width-4]  # Truncate if too long
+                    try:
+                        popup_win.addstr(i + 1, 2, line)
+                    except curses.error:
+                        pass
+                
+                # Show scroll indicator if needed
+                if len(details) > max_content_lines:
+                    total_lines = len(details)
+                    visible_end = min(scroll_offset + max_content_lines, total_lines)
+                    scroll_info = f" [{scroll_offset+1}-{visible_end}/{total_lines}] ↑/↓ Scroll | ESC/q Close "
+                    try:
+                        popup_win.addstr(popup_height-1, 2, scroll_info[:popup_width-4])
+                    except curses.error:
+                        pass
+                else:
+                    try:
+                        popup_win.addstr(popup_height-1, 2, " Press ESC or 'q' to close ")
+                    except curses.error:
+                        pass
+                
+                popup_win.refresh()
+                
+                # Handle input
+                key = self.stdscr.getch()
+                
+                if key == curses.KEY_UP and scroll_offset > 0:
+                    scroll_offset -= 1
+                elif key == curses.KEY_DOWN and scroll_offset + max_content_lines < len(details):
+                    scroll_offset += 1
+                elif key == curses.KEY_PPAGE and scroll_offset > 0:  # Page Up
+                    scroll_offset = max(0, scroll_offset - max_content_lines)
+                elif key == curses.KEY_NPAGE:  # Page Down
+                    scroll_offset = min(len(details) - max_content_lines, scroll_offset + max_content_lines)
+                elif key == 27 or key == ord('q'):  # Escape or 'q'
+                    break
             
-            # Show scroll indicator if needed
-            if len(details) > max_content_lines:
-                total_lines = len(details)
-                visible_end = min(scroll_offset + max_content_lines, total_lines)
-                scroll_info = f" [{scroll_offset+1}-{visible_end}/{total_lines}] ↑/↓ Scroll | ESC/q Close "
-                try:
-                    popup_win.addstr(popup_height-1, 2, scroll_info[:popup_width-4])
-                except curses.error:
-                    pass
-            else:
-                try:
-                    popup_win.addstr(popup_height-1, 2, " Press ESC or 'q' to close ")
-                except curses.error:
-                    pass
+            del popup_win
+            self.status_message = f"Viewed details for: {model.filename}"
             
-            popup_win.refresh()
-            
-            # Handle input
-            key = self.stdscr.getch()
-            
-            if key == curses.KEY_UP and scroll_offset > 0:
-                scroll_offset -= 1
-            elif key == curses.KEY_DOWN and scroll_offset + max_content_lines < len(details):
-                scroll_offset += 1
-            elif key == curses.KEY_PPAGE and scroll_offset > 0:  # Page Up
-                scroll_offset = max(0, scroll_offset - max_content_lines)
-            elif key == curses.KEY_NPAGE:  # Page Down
-                scroll_offset = min(len(details) - max_content_lines, scroll_offset + max_content_lines)
-            elif key == 27 or key == ord('q'):  # Escape or 'q'
-                break
-        
-        del popup_win
-        self.status_message = f"Viewed details for: {model.filename}"
+        except Exception as e:
+            self.status_message = f"Error showing model details: {e}"
     
     def build_model_details(self, model: Model) -> List[str]:
         """Build comprehensive model details as list of strings"""
@@ -840,18 +844,117 @@ class ModelHubTUI:
         details.append(f"Deleted: {'Yes' if model.deleted else 'No'}")
         details.append("")
         
-        # Additional Metadata (if available)
+        # Raw Metadata (comprehensive)
         try:
-            metadata_rows = self.db.get_model_metadata(model.id)
-            if metadata_rows:
-                details.append("═══ ADDITIONAL METADATA ═══")
-                for key, value in metadata_rows[:20]:  # Limit to first 20 entries
-                    details.append(f"{key}: {value[:100]}...")  # Truncate long values
-                if len(metadata_rows) > 20:
-                    details.append(f"... and {len(metadata_rows) - 20} more entries")
+            metadata_dict = self.db.get_model_metadata_dict(model.id) 
+            if metadata_dict:
+                details.append("═══ EXTRACTED METADATA ═══")
+                
+                # CivitAI Response Data
+                if 'civitai_response' in metadata_dict:
+                    details.append("--- CivitAI Data ---")
+                    import json
+                    try:
+                        civitai_data = json.loads(metadata_dict['civitai_response'])
+                        details.append(f"Model Name: {civitai_data.get('name', 'Unknown')}")
+                        details.append(f"CivitAI ID: {civitai_data.get('civitai_id', 'N/A')}")
+                        details.append(f"Version ID: {civitai_data.get('version_id', 'N/A')}")
+                        details.append(f"Base Model: {civitai_data.get('base_model', 'Unknown')}")
+                        details.append(f"Source: {civitai_data.get('source', 'Unknown')}")
+                        if civitai_data.get('triggers'):
+                            details.append(f"CivitAI Triggers: {', '.join(civitai_data['triggers'])}")
+                    except:
+                        details.append("CivitAI data (parse error)")
+                    details.append("")
+                
+                # SafeTensors Metadata
+                if 'safetensors_metadata' in metadata_dict:
+                    details.append("--- SafeTensors Metadata ---")
+                    try:
+                        st_data = json.loads(metadata_dict['safetensors_metadata'])
+                        # Show key SafeTensors fields
+                        important_keys = [
+                            'ss_base_model_version', 'ss_network_module', 'ss_output_name',
+                            'ss_tag_frequency', 'modelspec.architecture', 'modelspec.title',
+                            'ss_training_comment', 'ss_dataset_dirs'
+                        ]
+                        for key in important_keys:
+                            if key in st_data:
+                                value = str(st_data[key])[:200]  # Truncate long values
+                                details.append(f"{key}: {value}")
+                        
+                        # Show count of remaining fields
+                        remaining_keys = [k for k in st_data.keys() if k not in important_keys]
+                        if remaining_keys:
+                            details.append(f"... and {len(remaining_keys)} more fields")
+                    except:
+                        details.append("SafeTensors metadata (parse error)")
+                    details.append("")
+                
+                # Tensor Analysis
+                if 'tensor_names' in metadata_dict:
+                    details.append("--- Tensor Analysis ---")
+                    try:
+                        tensor_names = json.loads(metadata_dict['tensor_names'])
+                        details.append(f"Total Tensors: {len(tensor_names)}")
+                        # Show first few tensor names
+                        for i, name in enumerate(tensor_names[:5]):
+                            details.append(f"  {i+1}. {name}")
+                        if len(tensor_names) > 5:
+                            details.append(f"  ... and {len(tensor_names) - 5} more tensors")
+                    except:
+                        details.append("Tensor names (parse error)")
+                    details.append("")
+                
+                # Tensor Scores
+                if 'tensor_scores' in metadata_dict:
+                    details.append("--- Tensor Pattern Scores ---")
+                    try:
+                        scores = json.loads(metadata_dict['tensor_scores'])
+                        for pattern_type, score in sorted(scores.items(), key=lambda x: x[1], reverse=True):
+                            if score > 0:
+                                details.append(f"{pattern_type}: {score:.3f}")
+                    except:
+                        details.append("Tensor scores (parse error)")
+                    details.append("")
+                
+                # GGUF Metadata
+                if 'gguf_metadata' in metadata_dict:
+                    details.append("--- GGUF Metadata ---")
+                    try:
+                        gguf_data = json.loads(metadata_dict['gguf_metadata'])
+                        details.append(f"GGUF Version: {gguf_data.get('version', 'Unknown')}")
+                        details.append(f"Tensor Count: {gguf_data.get('tensor_count', 'Unknown')}")
+                        details.append(f"Metadata Entries: {gguf_data.get('metadata_count', 'Unknown')}")
+                    except:
+                        details.append("GGUF metadata (parse error)")
+                    details.append("")
+                
+                # File Information
+                if 'file_size' in metadata_dict:
+                    try:
+                        file_size = int(metadata_dict['file_size'])
+                        details.append("--- File Analysis ---")
+                        details.append(f"Analyzed Size: {file_size:,} bytes ({file_size / (1024*1024):.1f} MB)")
+                        if 'filename' in metadata_dict:
+                            details.append(f"Original Filename: {metadata_dict['filename']}")
+                        if 'file_extension' in metadata_dict:
+                            details.append(f"Extension: {metadata_dict['file_extension']}")
+                        details.append("")
+                    except:
+                        pass
+                
+            else:
+                details.append("═══ NO METADATA AVAILABLE ═══")
+                details.append("No raw metadata found for this model.")
+                details.append("This may indicate the model was classified before")
+                details.append("the enhanced metadata system was implemented.")
                 details.append("")
-        except Exception:
-            pass
+                
+        except Exception as e:
+            details.append("═══ METADATA ERROR ═══")
+            details.append(f"Error retrieving metadata: {e}")
+            details.append("")
         
         return details
     
