@@ -2,7 +2,23 @@
 
 ## Overview
 
-This document provides a comprehensive overview of the ModelHub classification system, including file locations, entry points, and the complete process flow.
+This document provides a comprehensive overview of the ModelHub classification system, including file locations, entry points, and the complete process flow. The system has been extensively updated to fully support ComfyUI's model ecosystem with 24+ model types and comprehensive base model support.
+
+## Recent Updates
+
+**Database Architecture Split (Latest):**
+- Split into dual databases: `modelhub.db` (model data) and `classification.db` (rules/config)
+- Added 24 comprehensive model types aligned with ComfyUI
+- Enhanced sub-type detection for flux, sd3, sdxl, wan, pony, sd15, and more
+- Complete deployment mapping coverage for all ComfyUI folders
+
+**Supported Model Types:**
+- Core: checkpoint, lora, vae, controlnet, unet, gguf
+- Encoders: clip, clip_vision, text_encoder  
+- Specialized: embedding, upscaler, hypernetwork
+- Face/Image: facerestore, insightface, photomaker, style_model
+- Advanced AI: diffuser, gligen, grounding_dino, ultralytics, sam, rmbg
+- Lightweight: vae_approx
 
 ## Classification Logic Location and Flow
 

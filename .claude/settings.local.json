@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(sqlite3:*)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "Bash(grep:*)",
+      "Bash(rm:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }

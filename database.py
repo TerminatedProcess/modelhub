@@ -73,33 +73,48 @@ class DeployLink:
     created_at: str
 
 class ModelHubDB:
-    """Database interface for ModelHub"""
+    """Database interface for ModelHub with dual database support"""
     
     def __init__(self, db_path: Path):
-        self.db_path = db_path
-        self.conn = None
-        self.ensure_database_exists()
+        self.db_path = db_path  # modelhub.db path
+        self.classification_db_path = db_path.parent / "classification.db"
+        self.conn = None  # modelhub.db connection
+        self.class_conn = None  # classification.db connection
+        self.ensure_databases_exist()
         
-    def ensure_database_exists(self):
-        """Ensure database and model-hub directory exist, create if missing"""
+    def ensure_databases_exist(self):
+        """Ensure both databases and model-hub directory exist, create if missing"""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
+        # Create modelhub.db if missing
         if not self.db_path.exists():
-            self.create_database()
+            self.create_modelhub_database()
+            
+        # Create classification.db if missing
+        if not self.classification_db_path.exists():
+            self.create_classification_database()
     
     def connect(self):
-        """Connect to database"""
+        """Connect to both databases"""
         try:
+            # Connect to modelhub.db (model data)
             self.conn = sqlite3.connect(self.db_path)
             self.conn.row_factory = sqlite3.Row
+            
+            # Connect to classification.db (rules and config)
+            self.class_conn = sqlite3.connect(self.classification_db_path)
+            self.class_conn.row_factory = sqlite3.Row
         except sqlite3.Error as e:
             raise Exception(f"Database connection failed: {e}")
     
     def disconnect(self):
-        """Disconnect from database"""
+        """Disconnect from both databases"""
         if self.conn:
             self.conn.close()
             self.conn = None
+        if self.class_conn:
+            self.class_conn.close()
+            self.class_conn = None
     
     def __enter__(self):
         """Context manager entry"""
@@ -110,9 +125,9 @@ class ModelHubDB:
         """Context manager exit"""
         self.disconnect()
     
-    def create_database(self):
-        """Create new database with all tables and default data"""
-        print(f"Creating new database at {self.db_path}")
+    def create_modelhub_database(self):
+        """Create modelhub.db with model data tables only"""
+        print(f"Creating modelhub database at {self.db_path}")
         
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -212,6 +227,43 @@ class ModelHubDB:
                 )
             """)
             
+            
+            # Create indexes for modelhub tables
+            cursor.execute("CREATE INDEX idx_models_hash ON models (file_hash)")
+            cursor.execute("CREATE INDEX idx_models_type ON models (primary_type, sub_type)")
+            cursor.execute("CREATE INDEX idx_models_triggers ON models (triggers)")
+            cursor.execute("CREATE INDEX idx_metadata_model ON model_metadata (model_id)")
+            cursor.execute("CREATE INDEX idx_metadata_key ON model_metadata (key)")
+            cursor.execute("CREATE INDEX idx_deploy_targets_name ON deploy_targets (name)")
+            cursor.execute("CREATE INDEX idx_deploy_mappings_target ON deploy_mappings (target_id)")
+            cursor.execute("CREATE INDEX idx_deploy_mappings_type ON deploy_mappings (model_type)")
+            cursor.execute("CREATE INDEX idx_deploy_links_model ON deploy_links (model_id)")
+            cursor.execute("CREATE INDEX idx_deploy_links_target ON deploy_links (target_id)")
+            cursor.execute("CREATE INDEX idx_deploy_links_deployed ON deploy_links (is_deployed)")
+            
+            conn.commit()
+            print("✓ Created modelhub database tables and indexes")
+            
+            # Create default deploy data
+            self._create_default_deploy_data(cursor)
+            
+            conn.commit()
+            print("✓ Created default deployment configuration")
+            
+        except Exception as e:
+            conn.rollback()
+            raise Exception(f"Error creating database: {e}")
+        finally:
+            conn.close()
+    
+    def create_classification_database(self):
+        """Create classification.db with classification rules and configuration"""
+        print(f"Creating classification database at {self.classification_db_path}")
+        
+        conn = sqlite3.connect(self.classification_db_path)
+        cursor = conn.cursor()
+        
+        try:
             # Create classification rules tables
             cursor.execute("""
                 CREATE TABLE model_types (
@@ -273,19 +325,6 @@ class ModelHubDB:
                 )
             """)
             
-            # Create indexes
-            cursor.execute("CREATE INDEX idx_models_hash ON models (file_hash)")
-            cursor.execute("CREATE INDEX idx_models_type ON models (primary_type, sub_type)")
-            cursor.execute("CREATE INDEX idx_models_triggers ON models (triggers)")
-            cursor.execute("CREATE INDEX idx_metadata_model ON model_metadata (model_id)")
-            cursor.execute("CREATE INDEX idx_metadata_key ON model_metadata (key)")
-            cursor.execute("CREATE INDEX idx_deploy_targets_name ON deploy_targets (name)")
-            cursor.execute("CREATE INDEX idx_deploy_mappings_target ON deploy_mappings (target_id)")
-            cursor.execute("CREATE INDEX idx_deploy_mappings_type ON deploy_mappings (model_type)")
-            cursor.execute("CREATE INDEX idx_deploy_links_model ON deploy_links (model_id)")
-            cursor.execute("CREATE INDEX idx_deploy_links_target ON deploy_links (target_id)")
-            cursor.execute("CREATE INDEX idx_deploy_links_deployed ON deploy_links (is_deployed)")
-            
             # Create indexes for classification tables
             cursor.execute("CREATE INDEX idx_model_types_name ON model_types (name)")
             cursor.execute("CREATE INDEX idx_size_rules_type ON size_rules (model_type)")
@@ -293,23 +332,18 @@ class ModelHubDB:
             cursor.execute("CREATE INDEX idx_architecture_patterns_arch ON architecture_patterns (architecture)")
             cursor.execute("CREATE INDEX idx_external_apis_priority ON external_apis (priority)")
             
-            # Note: All queries now explicitly include "WHERE deleted = 0" instead of using a view
-            
             conn.commit()
-            print("✓ Created database tables and indexes")
-            
-            # Create default deploy data
-            self._create_default_deploy_data(cursor)
+            print("✓ Created classification database tables and indexes")
             
             # Create default classification data
             self._create_default_classification_data(cursor)
             
             conn.commit()
-            print("✓ Created default deploy and classification configuration")
+            print("✓ Created default classification configuration")
             
         except Exception as e:
             conn.rollback()
-            raise Exception(f"Error creating database: {e}")
+            raise Exception(f"Error creating classification database: {e}")
         finally:
             conn.close()
     
@@ -336,12 +370,47 @@ class ModelHubDB:
         # Default deploy mappings
         deploy_mappings = []
         
-        # ComfyUI mappings
+        # ComfyUI mappings - comprehensive coverage of all model types
         comfyui_mappings = [
-            ('checkpoint', 'checkpoints'), ('lora', 'loras'), ('vae', 'vae'),
-            ('controlnet', 'controlnet'), ('embedding', 'embeddings'),
-            ('upscaler', 'upscale_models'), ('text_encoder', 'text_encoders'),
-            ('clip', 'clip'), ('unet', 'unet'), ('unknown', 'unknown')
+            # Core diffusion models
+            ('checkpoint', 'checkpoints'),
+            ('lora', 'loras'),
+            ('vae', 'vae'),
+            ('controlnet', 'controlnet'),
+            ('unet', 'unet'),
+            
+            # Text and vision encoders
+            ('clip', 'clip'),
+            ('clip_vision', 'clip_vision'),
+            ('text_encoder', 'text_encoders'),
+            
+            # Specialized models
+            ('embedding', 'embeddings'),
+            ('upscaler', 'upscale_models'),
+            ('hypernetwork', 'hypernetworks'),
+            
+            # Face and image processing
+            ('facerestore', 'facerestore_models'),
+            ('insightface', 'insightface'),
+            ('photomaker', 'photomaker'),
+            ('style_model', 'style_models'),
+            
+            # Advanced AI models
+            ('diffuser', 'diffusers'),
+            ('gligen', 'gligen'),
+            ('grounding_dino', 'grounding-dino'),
+            ('ultralytics', 'ultralytics'),
+            ('sam', 'sams'),
+            ('rmbg', 'RMBG'),
+            
+            # Lightweight models
+            ('vae_approx', 'vae_approx'),
+            
+            # GGUF models - deploy to appropriate sub-folders based on content
+            ('gguf', 'checkpoints'),  # Default, but should be determined by base model
+            
+            # Fallback
+            ('unknown', 'unknown')
         ]
         for model_type, folder_path in comfyui_mappings:
             deploy_mappings.append((target_ids['comfyui'], model_type, folder_path))
@@ -381,22 +450,44 @@ class ModelHubDB:
     def _create_default_classification_data(self, cursor):
         """Create default classification rules and data"""
         
-        # Default model types
+        # Default model types - aligned with ComfyUI structure
         model_types = [
+            # Core diffusion model types
             ('checkpoint', 'Checkpoint', 'Large diffusion model checkpoints'),
             ('lora', 'LoRA', 'Low-Rank Adaptation fine-tuning models'),
             ('vae', 'VAE', 'Variational Autoencoder models'),
             ('controlnet', 'ControlNet', 'Conditional control models'),
-            ('clip', 'CLIP', 'Text-image embedding models'),
-            ('text_encoder', 'Text Encoder', 'Text encoding models'),
             ('unet', 'UNet', 'U-Net diffusion models'),
             ('gguf', 'GGUF', 'GGML Universal File format models'),
-            ('upscaler', 'Upscaler', 'Image upscaling models'),
+            
+            # Text and vision encoders
+            ('clip', 'CLIP', 'Text-image embedding models'),
+            ('clip_vision', 'CLIP Vision', 'CLIP vision models'),
+            ('text_encoder', 'Text Encoder', 'Text encoding models'),
+            
+            # Specialized model types
             ('embedding', 'Embedding', 'Textual inversion embeddings'),
-            ('video_model', 'Video Model', 'Video generation models'),
-            ('mask_model', 'Mask Model', 'Segmentation and masking models'),
-            ('audio_model', 'Audio Model', 'Audio processing models'),
+            ('upscaler', 'Upscaler', 'Image upscaling models'),
             ('hypernetwork', 'Hypernetwork', 'Hypernetwork models'),
+            
+            # Face and image processing models
+            ('facerestore', 'Face Restore', 'Face restoration models'),
+            ('insightface', 'InsightFace', 'Face analysis and swapping models'),
+            ('photomaker', 'PhotoMaker', 'PhotoMaker models'),
+            ('style_model', 'Style Model', 'T2I style transfer models'),
+            
+            # Advanced AI models
+            ('diffuser', 'Diffusers', 'Diffusers format models'),
+            ('gligen', 'GLIGEN', 'Grounded language-image generation models'),
+            ('grounding_dino', 'Grounding DINO', 'Object detection models'),
+            ('ultralytics', 'Ultralytics', 'YOLO detection/segmentation models'),
+            ('sam', 'SAM', 'Segment Anything Models'),
+            ('rmbg', 'RMBG', 'Background removal models'),
+            
+            # Lightweight and approximation models
+            ('vae_approx', 'VAE Approx', 'Lightweight VAE approximation models'),
+            
+            # Legacy and unknown
             ('unknown', 'Unknown', 'Unclassified models')
         ]
         
@@ -405,21 +496,42 @@ class ModelHubDB:
             VALUES (?, ?, ?)
         """, model_types)
         
-        # Default size rules (in bytes)
+        # Default size rules (in bytes) - comprehensive ComfyUI model coverage
         size_rules = [
-            ('checkpoint', 1_000_000_000, 50_000_000_000, 0.3),  # 1GB-50GB
-            ('lora', 1_000_000, 2_000_000_000, 0.4),             # 1MB-2GB
-            ('vae', 50_000_000, 2_000_000_000, 0.4),             # 50MB-2GB
-            ('controlnet', 100_000_000, 10_000_000_000, 0.3),    # 100MB-10GB
-            ('clip', 10_000_000, 2_000_000_000, 0.3),            # 10MB-2GB
-            ('text_encoder', 10_000_000, 25_000_000_000, 0.3),   # 10MB-25GB
-            ('unet', 500_000_000, 30_000_000_000, 0.3),          # 500MB-30GB
-            ('gguf', 100_000_000, 200_000_000_000, 0.2),         # 100MB-200GB
-            ('upscaler', 1_000_000, 500_000_000, 0.4),           # 1MB-500MB
-            ('embedding', 1_000, 50_000_000, 0.5),               # 1KB-50MB
-            ('video_model', 100_000_000, 100_000_000_000, 0.3),  # 100MB-100GB
-            ('mask_model', 100_000_000, 2_000_000_000, 0.3),     # 100MB-2GB
-            ('audio_model', 50_000_000, 1_000_000_000, 0.3),     # 50MB-1GB
+            # Core diffusion models
+            ('checkpoint', 1_000_000_000, 50_000_000_000, 0.3),     # 1GB-50GB
+            ('lora', 1_000_000, 2_000_000_000, 0.4),                # 1MB-2GB
+            ('vae', 50_000_000, 2_000_000_000, 0.4),                # 50MB-2GB
+            ('controlnet', 100_000_000, 10_000_000_000, 0.3),       # 100MB-10GB
+            ('unet', 500_000_000, 30_000_000_000, 0.3),             # 500MB-30GB
+            ('gguf', 100_000_000, 200_000_000_000, 0.2),            # 100MB-200GB
+            
+            # Text and vision encoders
+            ('clip', 10_000_000, 2_000_000_000, 0.3),               # 10MB-2GB
+            ('clip_vision', 10_000_000, 1_000_000_000, 0.3),        # 10MB-1GB
+            ('text_encoder', 10_000_000, 25_000_000_000, 0.3),      # 10MB-25GB
+            
+            # Specialized models
+            ('embedding', 1_000, 50_000_000, 0.5),                  # 1KB-50MB
+            ('upscaler', 1_000_000, 500_000_000, 0.4),              # 1MB-500MB
+            ('hypernetwork', 1_000_000, 200_000_000, 0.4),          # 1MB-200MB
+            
+            # Face and image processing
+            ('facerestore', 10_000_000, 1_000_000_000, 0.4),        # 10MB-1GB
+            ('insightface', 100_000_000, 1_000_000_000, 0.4),       # 100MB-1GB
+            ('photomaker', 50_000_000, 2_000_000_000, 0.4),         # 50MB-2GB
+            ('style_model', 10_000_000, 500_000_000, 0.4),          # 10MB-500MB
+            
+            # Advanced AI models
+            ('diffuser', 500_000_000, 50_000_000_000, 0.3),         # 500MB-50GB
+            ('gligen', 100_000_000, 5_000_000_000, 0.3),            # 100MB-5GB
+            ('grounding_dino', 100_000_000, 2_000_000_000, 0.4),    # 100MB-2GB
+            ('ultralytics', 1_000_000, 500_000_000, 0.4),           # 1MB-500MB
+            ('sam', 100_000_000, 10_000_000_000, 0.4),              # 100MB-10GB
+            ('rmbg', 1_000_000, 500_000_000, 0.4),                  # 1MB-500MB
+            
+            # Lightweight models
+            ('vae_approx', 1_000_000, 100_000_000, 0.5),            # 1MB-100MB
         ]
         
         cursor.executemany("""
@@ -427,36 +539,69 @@ class ModelHubDB:
             VALUES (?, ?, ?, ?)
         """, size_rules)
         
-        # Default sub-type rules (filename patterns)
+        # Default sub-type rules (filename patterns) - aligned with ComfyUI base models
         sub_type_rules = [
-            # Checkpoint sub-types
-            ('checkpoint', 'flux_checkpoint', 'flux', 'filename', 0.9),
-            ('checkpoint', 'sdxl_checkpoint', 'xl|sdxl', 'filename', 0.8),
-            ('checkpoint', 'sd3_checkpoint', 'sd3', 'filename', 0.8),
-            ('checkpoint', 'sd15_checkpoint', '.*', 'filename', 0.1),  # Default
+            # Checkpoint sub-types - ordered by specificity
+            ('checkpoint', 'flux', 'flux', 'filename', 0.9),
+            ('checkpoint', 'sd3', 'sd3', 'filename', 0.8),
+            ('checkpoint', 'sdxl', 'xl|sdxl', 'filename', 0.8),
+            ('checkpoint', 'wan', 'wan|wanvideo', 'filename', 0.8),
+            ('checkpoint', 'pony', 'pony', 'filename', 0.8),
+            ('checkpoint', 'sd15', '1\\.5|v1-5|v15', 'filename', 0.7),
+            ('checkpoint', 'upscale', 'upscal|realesrgan|esrgan', 'filename', 0.8),
+            ('checkpoint', 'unknown', '.*', 'filename', 0.1),  # Default fallback
             
-            # LoRA sub-types
-            ('lora', 'flux_lora', 'flux', 'filename', 0.9),
-            ('lora', 'sdxl_lora', 'xl|sdxl', 'filename', 0.8),
-            ('lora', 'hunyuan_i2v_lora', 'hunyuan.*i2v', 'filename', 0.9),
-            ('lora', 'hunyuan_lora', 'hunyuan', 'filename', 0.8),
-            ('lora', 'i2v_lora', 'i2v', 'filename', 0.8),
-            ('lora', 'ltxv_lora', 'ltxv|ltx.*video', 'filename', 0.8),
-            ('lora', 'sd15_lora', '.*', 'filename', 0.1),  # Default
+            # LoRA sub-types - ordered by specificity  
+            ('lora', 'flux', 'flux', 'filename', 0.9),
+            ('lora', 'sd3', 'sd3', 'filename', 0.8),
+            ('lora', 'sdxl', 'xl|sdxl', 'filename', 0.8),
+            ('lora', 'pony', 'pony', 'filename', 0.8),
+            ('lora', 'wan', 'wan|wanvideo', 'filename', 0.8),
+            ('lora', 'sd15', '1\\.5|v1-5|v15', 'filename', 0.7),
+            ('lora', 'unknown', '.*', 'filename', 0.1),  # Default fallback
+            
+            # ControlNet sub-types
+            ('controlnet', 'flux', 'flux', 'filename', 0.9),
+            ('controlnet', 'sd3', 'sd3', 'filename', 0.8),
+            ('controlnet', 'sdxl', 'xl|sdxl', 'filename', 0.8),
+            ('controlnet', 'wan', 'wan|wanvideo', 'filename', 0.8),
+            ('controlnet', 'sd15', '1\\.5|v1-5|v15', 'filename', 0.7),
+            ('controlnet', 'unknown', '.*', 'filename', 0.1),  # Default fallback
             
             # VAE sub-types
-            ('vae', 'video_vae', 'video', 'filename', 0.9),
-            ('vae', 'sdxl_vae', 'xl|sdxl', 'filename', 0.8),
-            ('vae', 'sd15_vae', '.*', 'filename', 0.1),  # Default
+            ('vae', 'video', 'video', 'filename', 0.9),
+            ('vae', 'flux', 'flux', 'filename', 0.8),
+            ('vae', 'sd3', 'sd3', 'filename', 0.8),
+            ('vae', 'sdxl', 'xl|sdxl', 'filename', 0.8),
+            ('vae', 'sd15', '1\\.5|v1-5|v15', 'filename', 0.7),
+            ('vae', 'unknown', '.*', 'filename', 0.1),  # Default fallback
             
-            # GGUF sub-types
-            ('gguf', 'ltx_video', 'ltxv|ltx.*video', 'filename', 0.9),
-            ('gguf', 'text_to_video', 't2v|text2video', 'filename', 0.8),
-            ('gguf', 'image_to_video', 'i2v|image2video', 'filename', 0.8),
-            ('gguf', 'text_encoder', 'umt5|encoder', 'filename', 0.8),
-            ('gguf', 'large_llm', '.*', 'filesize_large', 0.3),  # >10GB
-            ('gguf', 'medium_llm', '.*', 'filesize_medium', 0.3),  # 1-10GB
-            ('gguf', 'small_llm', '.*', 'filesize_small', 0.3),   # <1GB
+            # GGUF sub-types - map to base model for deployment
+            ('gguf', 'quantized_model', '.*', 'filename', 0.9),  # All GGUF are quantized
+            
+            # Ultralytics sub-types for YOLO models
+            ('ultralytics', 'bbox', 'detect|bbox|yolo.*detect', 'filename', 0.8),
+            ('ultralytics', 'segm', 'segment|segm|yolo.*seg', 'filename', 0.8),
+            ('ultralytics', 'unknown', '.*', 'filename', 0.1),  # Default fallback
+            
+            # Generic sub-types for specialized models (most don't need sub-categorization)
+            ('facerestore', 'standard', '.*', 'filename', 0.5),
+            ('insightface', 'standard', '.*', 'filename', 0.5),
+            ('photomaker', 'standard', '.*', 'filename', 0.5),
+            ('style_model', 'standard', '.*', 'filename', 0.5),
+            ('diffuser', 'standard', '.*', 'filename', 0.5),
+            ('gligen', 'standard', '.*', 'filename', 0.5),
+            ('grounding_dino', 'standard', '.*', 'filename', 0.5),
+            ('sam', 'standard', '.*', 'filename', 0.5),
+            ('rmbg', 'standard', '.*', 'filename', 0.5),
+            ('vae_approx', 'standard', '.*', 'filename', 0.5),
+            ('clip', 'standard', '.*', 'filename', 0.5),
+            ('clip_vision', 'standard', '.*', 'filename', 0.5),
+            ('text_encoder', 'standard', '.*', 'filename', 0.5),
+            ('unet', 'standard', '.*', 'filename', 0.5),
+            ('embedding', 'standard', '.*', 'filename', 0.5),
+            ('upscaler', 'standard', '.*', 'filename', 0.5),
+            ('hypernetwork', 'standard', '.*', 'filename', 0.5),
         ]
         
         cursor.executemany("""
@@ -464,15 +609,42 @@ class ModelHubDB:
             VALUES (?, ?, ?, ?, ?)
         """, sub_type_rules)
         
-        # Default architecture patterns (tensor analysis)
+        # Default architecture patterns (tensor analysis) - comprehensive detection
         architecture_patterns = [
-            ('lora', '\\.lora_up\\.|lora_down\\.|alpha$', 0.95),
-            ('flux', 'double_blocks|single_blocks|img_attn|txt_attn', 0.95),
-            ('video_vae', 'downsamples.*residual|upsamples.*residual', 0.95),
-            ('vae', 'encoder\\.|decoder\\.|autoencoder', 0.9),
-            ('diffusion', 'diffusion_model|unet', 0.9),
-            ('controlnet', 'control_model|controlnet', 0.9),
-            ('clip', 'text_model|text_projection', 0.8),
+            # Core model architecture patterns
+            ('lora', '\\.lora_up\\.|lora_down\\.|alpha$|hada_w1_|hada_w2_', 0.95),
+            ('controlnet', 'control_model|controlnet|input_hint_block', 0.95),
+            ('vae', 'encoder\\.|decoder\\.|autoencoder|quant_conv|post_quant_conv', 0.9),
+            ('unet', 'diffusion_model|unet|input_blocks|middle_block|output_blocks', 0.9),
+            
+            # Advanced architecture patterns
+            ('flux', 'double_blocks|single_blocks|img_attn|txt_attn|guidance_in', 0.95),
+            ('video_vae', 'downsamples.*residual|upsamples.*residual|time_embedding', 0.95),
+            ('clip', 'text_model|text_projection|visual|transformer\\.resblocks', 0.85),
+            ('clip_vision', 'vision_model|visual\\.transformer|patch_embedding', 0.9),
+            ('text_encoder', 'encoder\\.block|encoder\\.embed_tokens|shared\\.weight', 0.85),
+            
+            # Specialized model patterns
+            ('sam', 'image_encoder|mask_decoder|prompt_encoder', 0.95),
+            ('grounding_dino', 'bbox_embed|class_embed|query_embed', 0.9),
+            ('ultralytics', 'model\\.\\d+|detect|segment|classify', 0.85),
+            ('insightface', 'fc1\\.weight|features\\.|landmark', 0.9),
+            ('facerestore', 'generator|discriminator|face_', 0.85),
+            
+            # Upscaler and restoration patterns
+            ('upscaler', 'upsampler|conv_up|pixel_shuffle|esrgan', 0.85),
+            ('rmbg', 'backbone|decode_head|auxiliary_head', 0.85),
+            
+            # Embedding and style patterns
+            ('embedding', 'string_to_param|emb_params|.*\\.bin', 0.9),
+            ('hypernetwork', 'linear_\\d+|mlp\\.|hypernetwork', 0.85),
+            ('style_model', 'style_proj|content_proj|adapter', 0.85),
+            
+            # Diffuser format patterns
+            ('diffuser', 'scheduler|tokenizer|feature_extractor', 0.8),
+            
+            # GGUF specific patterns (handled separately but included for completeness)
+            ('gguf', 'blk\\.|attn_|ffn_|norm', 0.7),
         ]
         
         cursor.executemany("""
@@ -686,7 +858,7 @@ class ModelHubDB:
     # Classification rule methods
     def get_size_rules(self) -> Dict[str, Dict[str, int]]:
         """Get size rules for model classification"""
-        cursor = self.conn.execute("""
+        cursor = self.class_conn.execute("""
             SELECT model_type, min_size, max_size, confidence_weight
             FROM size_rules WHERE enabled = 1
         """)
@@ -704,7 +876,7 @@ class ModelHubDB:
     
     def get_sub_type_rules(self) -> List[Tuple[str, str, str, str, float]]:
         """Get sub-type classification rules"""
-        cursor = self.conn.execute("""
+        cursor = self.class_conn.execute("""
             SELECT primary_type, sub_type, pattern, pattern_type, confidence_weight
             FROM sub_type_rules WHERE enabled = 1
             ORDER BY confidence_weight DESC
@@ -714,7 +886,7 @@ class ModelHubDB:
     
     def get_architecture_patterns(self) -> List[Tuple[str, str, float]]:
         """Get architecture detection patterns"""
-        cursor = self.conn.execute("""
+        cursor = self.class_conn.execute("""
             SELECT architecture, tensor_pattern, confidence_weight
             FROM architecture_patterns WHERE enabled = 1
             ORDER BY confidence_weight DESC
@@ -724,7 +896,7 @@ class ModelHubDB:
     
     def get_external_apis(self) -> List[Tuple[str, bool, int, float, int]]:
         """Get external API configuration"""
-        cursor = self.conn.execute("""
+        cursor = self.class_conn.execute("""
             SELECT name, enabled, priority, rate_limit_delay, timeout_seconds
             FROM external_apis WHERE enabled = 1
             ORDER BY priority ASC
@@ -734,7 +906,7 @@ class ModelHubDB:
     
     def get_model_types(self) -> List[Tuple[str, str]]:
         """Get supported model types"""
-        cursor = self.conn.execute("""
+        cursor = self.class_conn.execute("""
             SELECT name, display_name
             FROM model_types WHERE enabled = 1
             ORDER BY name

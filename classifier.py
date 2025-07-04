@@ -789,63 +789,122 @@ class ModelClassifier:
         
         if primary_type == 'lora':
             if base_model == 'flux':
-                return 'flux_lora'
+                return 'flux'
             elif base_model == 'sdxl':
-                return 'sdxl_lora'
+                return 'sdxl'
             elif base_model == 'sd15':
-                return 'sd15_lora'
+                return 'sd15'
+            elif base_model == 'sd3':
+                return 'sd3'
             elif base_model == 'wan':
-                return 'wan_lora'
-            elif base_model == 'hunyuan':
-                return 'hunyuan_lora'
-            elif base_model == 'ltxv':
-                return 'ltxv_lora'
-            elif base_model == 'video':
-                return 'video_lora'
+                return 'wan'
+            elif base_model == 'pony':
+                return 'pony'
             elif 'pony' in filename_lower:
-                return 'pony_lora'
+                return 'pony'
             elif 'wan' in filename_lower:
-                return 'wan_lora'
-            elif 'hunyuan' in filename_lower:
-                return 'hunyuan_lora'
-            elif 'ltx' in filename_lower:
-                return 'ltxv_lora'
-            elif 'video' in filename_lower:
-                return 'video_lora'
+                return 'wan'
+            elif 'flux' in filename_lower:
+                return 'flux'
+            elif 'sd3' in filename_lower:
+                return 'sd3'
+            elif 'xl' in filename_lower or 'sdxl' in filename_lower:
+                return 'sdxl'
+            elif '1.5' in filename_lower or 'v1-5' in filename_lower:
+                return 'sd15'
             else:
-                return 'unknown_lora'
+                return 'unknown'
         
         elif primary_type == 'checkpoint':
             if base_model == 'flux':
-                return 'flux_checkpoint'
+                return 'flux'
             elif base_model == 'sdxl':
-                return 'sdxl_checkpoint'
+                return 'sdxl'
             elif base_model == 'sd15':
-                return 'sd15_checkpoint'
+                return 'sd15'
+            elif base_model == 'sd3':
+                return 'sd3'
+            elif base_model == 'wan':
+                return 'wan'
+            elif base_model == 'pony':
+                return 'pony'
+            elif 'pony' in filename_lower:
+                return 'pony'
             elif 'wan' in filename_lower:
-                return 'wan_checkpoint'
-            elif 'video' in filename_lower:
-                return 'video_checkpoint'
+                return 'wan'
+            elif 'flux' in filename_lower:
+                return 'flux'
+            elif 'sd3' in filename_lower:
+                return 'sd3'
+            elif 'xl' in filename_lower or 'sdxl' in filename_lower:
+                return 'sdxl'
+            elif '1.5' in filename_lower or 'v1-5' in filename_lower:
+                return 'sd15'
+            elif 'upscal' in filename_lower or 'esrgan' in filename_lower:
+                return 'upscale'
             else:
-                return 'unknown_checkpoint'
+                return 'unknown'
         
         elif primary_type == 'vae':
             if 'video' in filename_lower:
-                return 'video_vae'
+                return 'video'
+            elif base_model == 'flux':
+                return 'flux'
             elif base_model == 'sdxl':
-                return 'sdxl_vae'
+                return 'sdxl'
+            elif base_model == 'sd3':
+                return 'sd3'
+            elif base_model == 'sd15':
+                return 'sd15'
+            elif 'flux' in filename_lower:
+                return 'flux'
+            elif 'sd3' in filename_lower:
+                return 'sd3'
+            elif 'xl' in filename_lower or 'sdxl' in filename_lower:
+                return 'sdxl'
+            elif '1.5' in filename_lower or 'v1-5' in filename_lower:
+                return 'sd15'
             else:
-                return 'standard_vae'
+                return 'unknown'
         
         elif primary_type == 'controlnet':
-            if 'openpose' in filename_lower:
-                return 'openpose_controlnet'
-            elif 'depth' in filename_lower:
-                return 'depth_controlnet'
-            elif 'canny' in filename_lower:
-                return 'canny_controlnet'
+            if base_model == 'flux':
+                return 'flux'
+            elif base_model == 'sdxl':
+                return 'sdxl'
+            elif base_model == 'sd3':
+                return 'sd3'
+            elif base_model == 'sd15':
+                return 'sd15'
+            elif base_model == 'wan':
+                return 'wan'
+            elif 'flux' in filename_lower:
+                return 'flux'
+            elif 'sd3' in filename_lower:
+                return 'sd3'
+            elif 'xl' in filename_lower or 'sdxl' in filename_lower:
+                return 'sdxl'
+            elif 'wan' in filename_lower:
+                return 'wan'
+            elif '1.5' in filename_lower or 'v1-5' in filename_lower:
+                return 'sd15'
             else:
-                return 'unknown_controlnet'
+                return 'unknown'
+        
+        elif primary_type == 'ultralytics':
+            if 'detect' in filename_lower or 'bbox' in filename_lower:
+                return 'bbox'
+            elif 'segment' in filename_lower or 'segm' in filename_lower:
+                return 'segm'
+            else:
+                return 'unknown'
+        
+        # For all other model types, use standard sub-type
+        elif primary_type in ['facerestore', 'insightface', 'photomaker', 'style_model', 
+                            'diffuser', 'gligen', 'grounding_dino', 'sam', 'rmbg', 
+                            'vae_approx', 'clip', 'clip_vision', 'text_encoder', 
+                            'unet', 'embedding', 'upscaler', 'hypernetwork']:
+            return 'standard'
         
         return 'unknown'
     
