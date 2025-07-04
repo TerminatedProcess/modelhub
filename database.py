@@ -935,12 +935,32 @@ class ModelHubDB:
         return sorted(model_files)
     
     def calculate_file_hash(self, file_path: Path) -> str:
-        """Calculate SHA256 hash of file"""
-        hash_sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_sha256.update(chunk)
-        return hash_sha256.hexdigest()
+        """Calculate SHA256 hash of file, using cached hash file if available"""
+        try:
+            # Check for cached hash file in source location
+            source_hash_file = file_path.parent / (file_path.stem + '.hash')
+            if source_hash_file.exists() and source_hash_file.stat().st_size > 0:
+                try:
+                    with open(source_hash_file, 'r', encoding='utf-8') as f:
+                        cached_hash = f.read().strip()
+                        if cached_hash and len(cached_hash) == 64:  # SHA-256 is 64 hex chars
+                            return cached_hash
+                except Exception as e:
+                    print(f"Error reading cached hash file {source_hash_file}: {e}")
+                    # Fall through to compute hash
+            
+            # Compute hash if no cached version or cached version is invalid
+            hash_sha256 = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_sha256.update(chunk)
+            computed_hash = hash_sha256.hexdigest()
+            
+            # Note: Hash file will be created in destination during import_model
+            return computed_hash
+        except Exception as e:
+            print(f"Error calculating hash for {file_path}: {e}")
+            return ""
     
     def import_model(self, file_path: Path, model_hub_path: Path, quiet: bool = False, config_manager=None) -> Optional[Model]:
         """Import a model file into the hub"""
@@ -952,6 +972,20 @@ class ModelHubDB:
         
         # Check if model already exists (including deleted ones)
         existing_model = self.get_model_by_hash(file_hash)
+        if existing_model:
+            # Verify that the storage file actually exists
+            storage_dir = model_hub_path / "models" / file_hash
+            storage_path = storage_dir / existing_model.filename
+            
+            if not storage_path.exists():
+                # Model exists in DB but file is missing - treat as new import
+                if not quiet:
+                    print(f"Model exists in DB but file missing - reimporting: {existing_model.filename}")
+                # Delete the stale database record
+                self.conn.execute("DELETE FROM models WHERE file_hash = ?", (file_hash,))
+                self.conn.commit()
+                existing_model = None
+        
         if existing_model:
             # If model was deleted, undelete it
             if existing_model.deleted:
@@ -999,6 +1033,36 @@ class ModelHubDB:
                     if not quiet:
                         print(f"Warning: Storage file not found for existing model: {storage_path}")
             
+            # Create hash file in destination if it doesn't exist (for existing models)
+            dest_hash_file = storage_path.parent / (storage_path.stem + '.hash')
+            
+            if not dest_hash_file.exists() or dest_hash_file.stat().st_size == 0:
+                # First check if source has a hash file we can copy
+                source_hash_file = file_path.parent / (file_path.stem + '.hash')
+                hash_to_write = file_hash  # Default to known hash from DB
+                source_method = "database"
+                
+                if source_hash_file.exists() and source_hash_file.stat().st_size > 0:
+                    try:
+                        with open(source_hash_file, 'r', encoding='utf-8') as f:
+                            source_hash = f.read().strip()
+                            if source_hash and len(source_hash) == 64:  # Valid SHA-256
+                                hash_to_write = source_hash
+                                source_method = "source file"
+                    except Exception as e:
+                        if not quiet:
+                            print(f"Warning: Could not read source hash file {source_hash_file}: {e}")
+                
+                # Write hash file to destination
+                try:
+                    with open(dest_hash_file, 'w', encoding='utf-8') as f:
+                        f.write(hash_to_write)
+                    if not quiet:
+                        print(f"Created hash file from {source_method}: {dest_hash_file.name}")
+                except Exception as e:
+                    if not quiet:
+                        print(f"Warning: Could not create hash file {dest_hash_file}: {e}")
+            
             return existing_model
         
         # Get file info
@@ -1045,6 +1109,17 @@ class ModelHubDB:
                 
         except Exception as e:
             raise Exception(f"Failed to move/copy file: {e}")
+        
+        # Create hash file in destination directory
+        dest_hash_file = storage_path.parent / (storage_path.stem + '.hash')
+        try:
+            with open(dest_hash_file, 'w', encoding='utf-8') as f:
+                f.write(file_hash)
+            if not quiet:
+                print(f"Created hash file: {dest_hash_file.name}")
+        except Exception as e:
+            if not quiet:
+                print(f"Warning: Could not create hash file {dest_hash_file}: {e}")
         
         # Comprehensive classification using new system
         from classifier import ModelClassifier
@@ -1163,3 +1238,76 @@ class ModelHubDB:
         """Export symlink commands for clipboard (STUB)"""
         # TODO: Implement symlink export
         pass
+    
+    def generate_missing_hash_files(self, model_hub_path: Path, quiet: bool = False) -> Tuple[int, int]:
+        """Generate hash files for models that don't have them
+        
+        Args:
+            model_hub_path: Path to model hub directory
+            quiet: If True, suppress output messages
+            
+        Returns:
+            Tuple of (files_processed, files_created)
+        """
+        files_processed = 0
+        files_created = 0
+        
+        if not quiet:
+            print("Scanning for models without hash files...")
+        
+        # Get all models from database
+        models = self.get_models(limit=999999, offset=0)
+        
+        for model in models:
+            if model.deleted:
+                continue
+                
+            # Construct expected model file path
+            model_dir = model_hub_path / "models" / model.file_hash
+            model_file = model_dir / model.filename
+            
+            if not model_file.exists():
+                if not quiet:
+                    print(f"Warning: Model file not found: {model_file}")
+                continue
+                
+            files_processed += 1
+            hash_file = model_file.parent / (model_file.stem + '.hash')
+            
+            # Check if hash file needs to be created or recreated
+            needs_hash_file = (
+                not hash_file.exists() or 
+                hash_file.stat().st_size == 0  # Zero-byte file
+            )
+            
+            if needs_hash_file:
+                try:
+                    # Write the hash to the file
+                    with open(hash_file, 'w', encoding='utf-8') as f:
+                        f.write(model.file_hash)
+                    files_created += 1
+                    
+                    if not quiet:
+                        print(f"Created hash file: {hash_file.name}")
+                        
+                except Exception as e:
+                    if not quiet:
+                        print(f"Error creating hash file for {model.filename}: {e}")
+            else:
+                # Verify existing hash file matches database
+                try:
+                    with open(hash_file, 'r', encoding='utf-8') as f:
+                        file_hash = f.read().strip()
+                        if file_hash != model.file_hash:
+                            if not quiet:
+                                print(f"Warning: Hash file mismatch for {model.filename}")
+                                print(f"  File hash: {file_hash}")
+                                print(f"  DB hash:   {model.file_hash}")
+                except Exception as e:
+                    if not quiet:
+                        print(f"Error reading hash file for {model.filename}: {e}")
+        
+        if not quiet:
+            print(f"Processed {files_processed} models, created {files_created} hash files")
+        
+        return files_processed, files_created

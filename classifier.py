@@ -909,13 +909,29 @@ class ModelClassifier:
         return 'unknown'
     
     def calculate_file_hash(self, file_path: Path) -> Optional[str]:
-        """Calculate SHA-256 hash of file"""
+        """Calculate SHA-256 hash of file, using cached hash file if available"""
         try:
+            # Check for cached hash file in source location
+            source_hash_file = file_path.parent / (file_path.stem + '.hash')
+            if source_hash_file.exists() and source_hash_file.stat().st_size > 0:
+                try:
+                    with open(source_hash_file, 'r', encoding='utf-8') as f:
+                        cached_hash = f.read().strip()
+                        if cached_hash and len(cached_hash) == 64:  # SHA-256 is 64 hex chars
+                            return cached_hash
+                except Exception as e:
+                    print(f"Error reading cached hash file {source_hash_file}: {e}")
+                    # Fall through to compute hash
+            
+            # Compute hash if no cached version or cached version is invalid
             hash_sha256 = hashlib.sha256()
             with open(file_path, "rb") as f:
                 for chunk in iter(lambda: f.read(4096), b""):
                     hash_sha256.update(chunk)
-            return hash_sha256.hexdigest()
+            computed_hash = hash_sha256.hexdigest()
+            
+            # Note: Hash file will be created in destination during import_model
+            return computed_hash
         except Exception as e:
             print(f"Error calculating hash for {file_path}: {e}")
             return None

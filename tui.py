@@ -110,6 +110,8 @@ class ModelHubTUI:
                 self.reclassify_models()
             elif key == ord('X'):
                 self.delete_models()
+            elif key == ord('H'):
+                self.generate_hash_files()
             elif key == ord('\n') or key == curses.KEY_ENTER:
                 self.show_model_options()
     
@@ -300,7 +302,7 @@ class ModelHubTUI:
                 pass
         
         # Help line
-        help_line = "↑/↓ Select | PgUp/PgDn Jump | Click/F Filter | n Non-CivitAI | r Reset | R Reclassify | D Deploy | h Help | q Quit"
+        help_line = "↑/↓ Select | PgUp/PgDn Jump | Click/F Filter | n Non-CivitAI | r Reset | R Reclassify | H Hash | D Deploy | h Help | q Quit"
         try:
             self.stdscr.addstr(self.height-2, 0, help_line[:self.width-1], curses.color_pair(3))
         except curses.error:
@@ -337,6 +339,7 @@ class ModelHubTUI:
             "  'S' - Scan directory for models",
             "  'R' - Reclassify models",
             "  'X' - Delete selected models",
+            "  'H' - Generate hash files",
             "",
             "Deployment:",
             "  'c' - Configure deploy targets",
@@ -1776,6 +1779,40 @@ class ModelHubTUI:
         """Export symlink commands (STUB)"""
         self.status_message = "Export symlinks functionality - STUB"
         # TODO: Implement symlink export
+    
+    def generate_hash_files(self):
+        """Generate hash files for all models in the database"""
+        # Exit ncurses mode for console output
+        curses.endwin()
+        
+        try:
+            print(f"\n=== ModelHub Hash File Generation ===")
+            print("Generating hash files for all models in the database...")
+            
+            # Get model hub path from config
+            model_hub_path = self.config.get_model_hub_path()
+            
+            # Generate hash files
+            files_processed, files_created = self.db.generate_missing_hash_files(model_hub_path, quiet=False)
+            
+            print(f"\nOperation complete!")
+            print(f"Files processed: {files_processed}")
+            print(f"Hash files created: {files_created}")
+            
+            # Set status message
+            self.status_message = f"Generated {files_created} hash files ({files_processed} processed)"
+            
+            input("\nPress Enter to return to ModelHub...")
+            
+        except Exception as e:
+            print(f"Error during hash file generation: {e}")
+            input("Press Enter to continue...")
+            self.status_message = f"Hash generation error: {e}"
+        
+        finally:
+            # Restart ncurses mode
+            self.stdscr.clear()
+            self.stdscr.refresh()
     
     # Cleanup operations (STUB)
     def cleanup_menu(self):
