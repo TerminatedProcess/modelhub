@@ -6,7 +6,8 @@
       "Bash(grep:*)",
       "Bash(rm:*)",
       "Bash(python3:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(awk:*)"
     ],
     "deny": []
   }

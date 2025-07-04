@@ -12,10 +12,11 @@ ModelHub is a sophisticated model management system that:
 
 ## Current State
 
-### Database
-- **Location**: `/mnt/llm/model-hub/modelhub.db` (main database with 539 models)
+### Database Architecture
+- **Main Database**: `/mnt/llm/model-hub/modelhub.db` (models, metadata, deployment)
+- **Classification Database**: `/mnt/llm/model-hub/classification.db` (types, rules, patterns)
 - **Working Copy**: `./modelhub.db` (empty, for development)
-- **Architecture**: SQLite with comprehensive schema for models, metadata, and deployment
+- **Architecture**: Dual SQLite databases for separation of concerns
 
 ### Model Statistics (Production Database)
 - **Total Models**: 539 active models
@@ -30,7 +31,8 @@ ModelHub is a sophisticated model management system that:
 ### Storage Structure
 ```
 /mnt/llm/model-hub/
-├── modelhub.db                 # Main database
+├── modelhub.db                 # Main database (models, metadata, deployment)
+├── classification.db           # Classification database (types, rules, patterns)
 └── models/                     # Hash-organized model storage
     ├── 00674ab0e236.../        # Model hash directories
     │   └── model-file.safetensors
@@ -42,9 +44,8 @@ ModelHub is a sophisticated model management system that:
 ## Key Components
 
 ### Core Scripts
-- `modelhub.py` - Main application entry point
-- `modelhub_cli.py` - Command-line interface
-- `tui.py` - Terminal user interface (modified)
+- `modelhub.py` - Main application entry point with TUI launcher
+- `tui.py` - Terminal user interface with full model management
 - `database.py` - Database operations and model management
 - `classifier.py` - Model classification engine
 - `create_default_deploy.py` - Deployment configuration setup
@@ -55,19 +56,21 @@ ModelHub is a sophisticated model management system that:
 
 ### Database Schema
 
-#### Core Tables
+#### Main Database (modelhub.db)
 - **models** - Primary model records with classification data
 - **model_metadata** - Extended key-value metadata storage
 - **deploy_targets** - Deployment destination configurations
 - **deploy_mappings** - Model type to folder path mappings
 - **deploy_links** - Symlink deployment tracking
 
-#### Classification Tables
-- **model_types** - Supported model type definitions
+#### Classification Database (classification.db)
+- **model_types** - Supported model type definitions (checkpoint, lora, vae, etc.)
+- **sub_type_rules** - Pattern-based sub-type classification (flux, sdxl, pony, etc.)
 - **size_rules** - File size-based classification rules
-- **sub_type_rules** - Pattern-based sub-type classification
-- **architecture_patterns** - Tensor analysis patterns
-- **external_apis** - External service configurations
+- **architecture_patterns** - Tensor analysis patterns for deep classification
+- **external_apis** - External service configurations (CivitAI, etc.)
+
+*Note: See [ClassifyLogic.md](ClassifyLogic.md) for detailed classification system documentation.*
 
 ## Classification System
 
@@ -112,11 +115,18 @@ Models are deployed via symlinks from hash-organized storage to target applicati
 - [x] Metadata extraction and storage
 - [x] Basic deployment configuration
 - [x] CLI interface
-- [x] TUI interface foundations
+- [x] TUI interface with full model management
+- [x] Runtime symlinks toggle (Shift+Y hotkey)
+- [x] Model scanning with symlink conversion
+- [x] Comprehensive model reclassification
+- [x] Model metadata viewing and management
+- [x] Hash file generation
+- [x] Clipboard integration for symlink commands
+- [x] Live filtering and sorting in TUI
+- [x] Model deletion with soft delete support
 
 ### In Progress 🚧
 - [ ] **Deploy Stub Creation** - Building symlink-based deployment system
-- [ ] TUI enhancements (recent modifications to `tui.py`)
 
 ### Planned Features 📋
 - [ ] **Product Folder Creation** - Automated symlink deployment to target applications
@@ -147,9 +157,9 @@ Models are deployed via symlinks from hash-organized storage to target applicati
 ## Configuration
 
 ### Model Hub Settings
-- **Path**: `/mnt/llm/model-hub`
-- **Page Size**: 1000 models per page
-- **Preserve Originals**: false (converts to symlinks)
+- **Path**: `/mnt/llm/model-hub` (configurable in config.yaml)
+- **Page Size**: 1000 models per page (configurable)
+- **Symlinks**: Runtime toggle (Shift+Y), defaults to enabled each session
 
 ### Supported File Extensions
 - `.safetensors` (primary format)
@@ -170,13 +180,44 @@ Models are deployed via symlinks from hash-organized storage to target applicati
 python modelhub_cli.py stats
 
 # Launch TUI
-python tui.py
+python modelhub.py
 
 # Create deployment configuration
 python create_default_deploy.py
 
-# Scan and import models
+# Scan and import models (TUI has Shift+S hotkey)
 python modelhub_cli.py scan /path/to/models
+```
+
+### TUI Hotkeys
+```
+Navigation:
+  ↑/↓ - Navigate models
+  PgUp/PgDn - Jump by page
+  ←/→ - Previous/next page
+  ENTER/'d' - Show model details
+  
+Filtering:
+  Click filter fields or 'F' - Activate filtering
+  Tab - Move between filter fields
+  'n' - Toggle non-CivitAI filter
+  'r' - Reset all filters
+  
+Model Management:
+  'S' - Scan directory for new models
+  'R' - Reclassify models
+  'X' - Delete selected models
+  'H' - Generate hash files
+  'Y' - Toggle symlinks on/off (defaults to on)
+  
+Deployment:
+  'D' - Deploy menu
+  'c' - Configure deploy targets
+  'e' - Export models
+  
+Other:
+  'h' - Toggle help screen
+  'q' - Quit application
 ```
 
 ### Database Queries
@@ -224,7 +265,11 @@ sqlite3 /mnt/llm/model-hub/modelhub.db "SELECT name, display_name, enabled FROM 
 - **create_default_deploy.py** - Deployment setup utility
 - **db_update.py** - Database migration and updates
 - **hubclassify.py** - Standalone classification utility
-- **clipboard_utils.py** - System clipboard integration
+- **clipboard_utils.py** - Cross-platform clipboard integration
+
+### Legacy Scripts (in hold/ directory)
+- **modelhub_cli.py** - Original CLI interface
+- **Various utilities** - Legacy tools and migration scripts
 
 ### Configuration Files
 - **config.yaml** - Main application configuration

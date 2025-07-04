@@ -59,11 +59,8 @@ class ConfigManager:
         """Create default configuration file"""
         default_config = {
             'model_hub': {
-                'path': '/mnt/spare2/llm/model-hub',
+                'path': './model-hub',
                 'page_size': 1000
-            },
-            'scanning': {
-                'preserve_originals': False     # Keep original files (no symlinks), default: false
             },
             'file_extensions': [
                 '.safetensors',

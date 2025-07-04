@@ -325,12 +325,93 @@ class ModelHubDB:
                 )
             """)
             
+            # New data-driven classification tables
+            cursor.execute("""
+                CREATE TABLE detection_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rule_name TEXT NOT NULL,
+                    rule_type TEXT NOT NULL,           -- 'base_model', 'primary_type', 'sub_type', 'modifier'
+                    source_type TEXT NOT NULL,         -- 'civitai_field', 'filename', 'metadata_field', 'tensor_pattern', 'file_size'
+                    source_field TEXT,                 -- 'baseModel', 'ss_base_model_version', 'name'
+                    pattern TEXT NOT NULL,             -- Regex or exact match pattern
+                    output_value TEXT NOT NULL,        -- What this rule produces: 'flux', 'checkpoint', 'quantized'
+                    confidence REAL DEFAULT 0.5,      -- How confident this rule is
+                    priority INTEGER DEFAULT 1,       -- Rule execution order
+                    fallback_rule_id INTEGER,         -- Chain to another rule if this fails
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (fallback_rule_id) REFERENCES detection_rules(id)
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE classification_workflows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workflow_name TEXT NOT NULL,      -- 'standard_classification', 'fast_classification'
+                    step_order INTEGER NOT NULL,     -- 1, 2, 3...
+                    rule_group TEXT NOT NULL,        -- 'base_model_detection', 'primary_type_detection'
+                    required BOOLEAN DEFAULT FALSE,  -- Must this step succeed?
+                    weight REAL DEFAULT 1.0,         -- How much this step contributes to final confidence
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE pattern_modifiers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    modifier_name TEXT NOT NULL,      -- 'quantization_detector', 'variant_detector'
+                    pattern TEXT NOT NULL,            -- 'quantiz|fp8|gguf|int8|int4'
+                    modifier_suffix TEXT NOT NULL,    -- '-quantized', '-dev', '-schnell'
+                    applies_to_types TEXT,            -- 'checkpoint,lora' or 'all'
+                    applies_to_subtypes TEXT,         -- 'flux,sdxl' or 'all'
+                    priority INTEGER DEFAULT 1,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE external_api_mappings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    api_name TEXT NOT NULL,           -- 'civitai', 'huggingface'
+                    api_field TEXT NOT NULL,          -- 'type', 'baseModel', 'tags'
+                    api_value TEXT NOT NULL,          -- 'checkpoint', 'SDXL', 'LoRA'
+                    modelhub_field TEXT NOT NULL,     -- 'primary_type', 'base_model', 'sub_type'
+                    modelhub_value TEXT NOT NULL,     -- 'checkpoint', 'sdxl', 'lora'
+                    confidence REAL DEFAULT 0.9,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            cursor.execute("""
+                CREATE TABLE confidence_weights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_type TEXT NOT NULL,        -- 'civitai', 'tensor_analysis', 'filename', 'file_size', 'metadata'
+                    field_type TEXT NOT NULL,         -- 'primary_type', 'sub_type', 'base_model'
+                    base_weight REAL NOT NULL,        -- Base confidence contribution
+                    quality_multiplier REAL DEFAULT 1.0, -- Adjust based on data quality
+                    enabled BOOLEAN DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             # Create indexes for classification tables
             cursor.execute("CREATE INDEX idx_model_types_name ON model_types (name)")
             cursor.execute("CREATE INDEX idx_size_rules_type ON size_rules (model_type)")
             cursor.execute("CREATE INDEX idx_sub_type_rules_primary ON sub_type_rules (primary_type)")
             cursor.execute("CREATE INDEX idx_architecture_patterns_arch ON architecture_patterns (architecture)")
             cursor.execute("CREATE INDEX idx_external_apis_priority ON external_apis (priority)")
+            
+            # Create indexes for new data-driven tables
+            cursor.execute("CREATE INDEX idx_detection_rules_type ON detection_rules (rule_type)")
+            cursor.execute("CREATE INDEX idx_detection_rules_source ON detection_rules (source_type)")
+            cursor.execute("CREATE INDEX idx_detection_rules_priority ON detection_rules (priority)")
+            cursor.execute("CREATE INDEX idx_workflows_order ON classification_workflows (step_order)")
+            cursor.execute("CREATE INDEX idx_pattern_modifiers_priority ON pattern_modifiers (priority)")
+            cursor.execute("CREATE INDEX idx_api_mappings_api ON external_api_mappings (api_name)")
+            cursor.execute("CREATE INDEX idx_confidence_weights_source ON confidence_weights (source_type)")
             
             conn.commit()
             print("✓ Created classification database tables and indexes")
@@ -661,6 +742,104 @@ class ModelHubDB:
             INSERT INTO external_apis (name, enabled, priority, rate_limit_delay, timeout_seconds)
             VALUES (?, ?, ?, ?, ?)
         """, external_apis)
+        
+        # Default detection rules - migrate hard-coded logic to data-driven rules
+        detection_rules = [
+            # Base model detection rules from CivitAI
+            (1, 'flux_civitai_base', 'base_model', 'civitai_field', 'baseModel', '(?i)flux', 'flux', 0.95, 1, None, True),
+            (2, 'sdxl_civitai_base', 'base_model', 'civitai_field', 'baseModel', '(?i)sdxl|xl', 'sdxl', 0.95, 1, None, True),
+            (3, 'sd3_civitai_base', 'base_model', 'civitai_field', 'baseModel', '(?i)sd\\s*3|sd3', 'sd3', 0.95, 1, None, True),
+            (4, 'sd15_civitai_base', 'base_model', 'civitai_field', 'baseModel', '(?i)sd\\s*1\\.5|sd15', 'sd15', 0.95, 1, None, True),
+            (5, 'sd2_civitai_base', 'base_model', 'civitai_field', 'baseModel', '(?i)sd\\s*2|sd2', 'sd2', 0.95, 1, None, True),
+            (6, 'pony_civitai_base', 'base_model', 'civitai_field', 'baseModel', '(?i)pony', 'pony', 0.95, 1, None, True),
+            (7, 'wan_civitai_base', 'base_model', 'civitai_field', 'baseModel', '(?i)wan|video', 'wan', 0.9, 1, None, True),
+            
+            # Base model detection from filename (fallback)
+            (8, 'flux_filename_base', 'base_model', 'filename', None, '(?i)flux', 'flux', 0.8, 2, None, True),
+            (9, 'sdxl_filename_base', 'base_model', 'filename', None, '(?i)xl|sdxl', 'sdxl', 0.8, 2, None, True),
+            (10, 'sd3_filename_base', 'base_model', 'filename', None, '(?i)sd3', 'sd3', 0.8, 2, None, True),
+            (11, 'pony_filename_base', 'base_model', 'filename', None, '(?i)pony', 'pony', 0.8, 2, None, True),
+            (12, 'wan_filename_base', 'base_model', 'filename', None, '(?i)wan|wanvideo', 'wan', 0.8, 2, None, True),
+            
+            # Primary type fallback rules for unknown CivitAI types
+            (13, 'flux_unknown_to_checkpoint', 'primary_type', 'base_model_conditional', 'flux', 'unknown', 'checkpoint', 0.7, 1, None, True),
+            (14, 'pony_unknown_to_checkpoint', 'primary_type', 'base_model_conditional', 'pony', 'unknown', 'checkpoint', 0.8, 1, None, True),
+            (15, 'sdxl_unknown_to_checkpoint', 'primary_type', 'base_model_conditional', 'sdxl', 'unknown', 'checkpoint', 0.7, 1, None, True),
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO detection_rules (id, rule_name, rule_type, source_type, source_field, pattern, output_value, confidence, priority, fallback_rule_id, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, detection_rules)
+        
+        # Pattern modifiers for variants and quantization
+        pattern_modifiers = [
+            (1, 'flux_dev_variant', '(?i)dev(?!ice)', '-dev', 'checkpoint,lora,controlnet,vae', 'flux', 1, True),
+            (2, 'flux_schnell_variant', '(?i)schnell', '-schnell', 'checkpoint,lora,controlnet,vae', 'flux', 1, True),
+            (3, 'quantization_global', '(?i)quantiz|fp8|gguf|int8|int4', '-quantized', 'all', 'all', 1, True),
+            (4, 'anime_style', '(?i)anime|manga|cartoon', '-anime', 'all', 'all', 2, True),
+            (5, 'realism_style', '(?i)realism|realistic|photorealistic', '-realism', 'all', 'all', 2, True),
+            (6, 'portrait_style', '(?i)portrait|headshot|face', '-portrait', 'all', 'all', 3, True),
+            (7, 'video_variant', '(?i)i2v|text2video|t2v|motion', '-i2v', 'all', 'all', 1, True),
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO pattern_modifiers (id, modifier_name, pattern, modifier_suffix, applies_to_types, applies_to_subtypes, priority, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, pattern_modifiers)
+        
+        # External API mappings (migrate hard-coded CivitAI type mapping)
+        external_api_mappings = [
+            (1, 'civitai', 'type', 'checkpoint', 'primary_type', 'checkpoint', 0.9, True),
+            (2, 'civitai', 'type', 'textualinversion', 'primary_type', 'embedding', 0.9, True),
+            (3, 'civitai', 'type', 'lora', 'primary_type', 'lora', 0.9, True),
+            (4, 'civitai', 'type', 'lycoris', 'primary_type', 'lora', 0.9, True),
+            (5, 'civitai', 'type', 'hypernetwork', 'primary_type', 'hypernetwork', 0.9, True),
+            (6, 'civitai', 'type', 'controlnet', 'primary_type', 'controlnet', 0.9, True),
+            (7, 'civitai', 'type', 'vae', 'primary_type', 'vae', 0.9, True),
+            (8, 'civitai', 'type', 'poses', 'primary_type', 'pose', 0.9, True),
+            (9, 'civitai', 'type', 'wildcards', 'primary_type', 'wildcard', 0.9, True),
+            (10, 'civitai', 'type', 'workflows', 'primary_type', 'workflow', 0.9, True),
+            (11, 'civitai', 'type', 'other', 'primary_type', 'unknown', 0.5, True),
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO external_api_mappings (id, api_name, api_field, api_value, modelhub_field, modelhub_value, confidence, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, external_api_mappings)
+        
+        # Confidence weights (migrate hard-coded scoring weights)
+        confidence_weights = [
+            (1, 'civitai', 'primary_type', 1.0, 1.0, True),
+            (2, 'civitai', 'base_model', 1.0, 1.0, True),
+            (3, 'tensor_analysis', 'primary_type', 0.5, 1.0, True),
+            (4, 'filename', 'primary_type', 0.2, 1.0, True),
+            (5, 'filename', 'sub_type', 0.2, 1.0, True),
+            (6, 'file_size', 'primary_type', 0.2, 1.0, True),
+            (7, 'metadata', 'primary_type', 0.1, 1.0, True),
+            (8, 'metadata', 'base_model', 0.3, 1.0, True),
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO confidence_weights (id, source_type, field_type, base_weight, quality_multiplier, enabled)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, confidence_weights)
+        
+        # Classification workflow (define the standard classification process)
+        classification_workflows = [
+            (1, 'standard_classification', 1, 'external_api_lookup', False, 1.0, True),
+            (2, 'standard_classification', 2, 'base_model_detection', False, 0.9, True),
+            (3, 'standard_classification', 3, 'primary_type_detection', True, 1.0, True),
+            (4, 'standard_classification', 4, 'sub_type_detection', False, 0.8, True),
+            (5, 'standard_classification', 5, 'pattern_modifiers', False, 0.5, True),
+            (6, 'standard_classification', 6, 'tensor_analysis', False, 0.5, True),
+            (7, 'standard_classification', 7, 'file_size_fallback', False, 0.2, True),
+        ]
+        
+        cursor.executemany("""
+            INSERT INTO classification_workflows (id, workflow_name, step_order, rule_group, required, weight, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, classification_workflows)
     
     # Model operations
     def get_models(self, limit: int = 100, offset: int = 0, 
@@ -855,6 +1034,89 @@ class ModelHubDB:
             links.append(DeployLink(**dict(row)))
         return links
     
+    # Data-driven classification methods
+    def get_detection_rules(self, rule_type: Optional[str] = None, source_type: Optional[str] = None) -> List[Dict]:
+        """Get detection rules from database"""
+        query = """
+            SELECT id, rule_name, rule_type, source_type, source_field, pattern, output_value, 
+                   confidence, priority, fallback_rule_id, enabled
+            FROM detection_rules
+            WHERE enabled = 1
+        """
+        params = []
+        
+        if rule_type:
+            query += " AND rule_type = ?"
+            params.append(rule_type)
+        if source_type:
+            query += " AND source_type = ?"
+            params.append(source_type)
+            
+        query += " ORDER BY priority ASC, confidence DESC"
+        
+        cursor = self.class_conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def get_pattern_modifiers(self, applies_to_type: Optional[str] = None, applies_to_subtype: Optional[str] = None) -> List[Dict]:
+        """Get pattern modifiers from database"""
+        query = """
+            SELECT id, modifier_name, pattern, modifier_suffix, applies_to_types, applies_to_subtypes, priority, enabled
+            FROM pattern_modifiers
+            WHERE enabled = 1
+        """
+        params = []
+        
+        if applies_to_type:
+            query += " AND (applies_to_types = 'all' OR applies_to_types LIKE ?)"
+            params.append(f'%{applies_to_type}%')
+        if applies_to_subtype:
+            query += " AND (applies_to_subtypes = 'all' OR applies_to_subtypes LIKE ?)"
+            params.append(f'%{applies_to_subtype}%')
+            
+        query += " ORDER BY priority ASC"
+        
+        cursor = self.class_conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def get_external_api_mappings(self, api_name: str) -> List[Dict]:
+        """Get external API mappings from database"""
+        cursor = self.class_conn.execute("""
+            SELECT id, api_name, api_field, api_value, modelhub_field, modelhub_value, confidence, enabled
+            FROM external_api_mappings
+            WHERE enabled = 1 AND api_name = ?
+            ORDER BY confidence DESC
+        """, (api_name,))
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def get_confidence_weights(self, source_type: Optional[str] = None, field_type: Optional[str] = None) -> List[Dict]:
+        """Get confidence weights from database"""
+        query = """
+            SELECT id, source_type, field_type, base_weight, quality_multiplier, enabled
+            FROM confidence_weights
+            WHERE enabled = 1
+        """
+        params = []
+        
+        if source_type:
+            query += " AND source_type = ?"
+            params.append(source_type)
+        if field_type:
+            query += " AND field_type = ?"
+            params.append(field_type)
+            
+        cursor = self.class_conn.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def get_classification_workflow(self, workflow_name: str = 'standard_classification') -> List[Dict]:
+        """Get classification workflow steps from database"""
+        cursor = self.class_conn.execute("""
+            SELECT id, workflow_name, step_order, rule_group, required, weight, enabled
+            FROM classification_workflows
+            WHERE enabled = 1 AND workflow_name = ?
+            ORDER BY step_order ASC
+        """, (workflow_name,))
+        return [dict(row) for row in cursor.fetchall()]
+
     # Classification rule methods
     def get_size_rules(self) -> Dict[str, Dict[str, int]]:
         """Get size rules for model classification"""
@@ -962,7 +1224,7 @@ class ModelHubDB:
             print(f"Error calculating hash for {file_path}: {e}")
             return ""
     
-    def import_model(self, file_path: Path, model_hub_path: Path, quiet: bool = False, config_manager=None) -> Optional[Model]:
+    def import_model(self, file_path: Path, model_hub_path: Path, quiet: bool = False, config_manager=None, preserve_originals: bool = False) -> Optional[Model]:
         """Import a model file into the hub"""
         if not file_path.exists():
             raise FileNotFoundError(f"Model file not found: {file_path}")
@@ -1003,15 +1265,7 @@ class ModelHubDB:
                     print(f"Model already exists: {existing_model.filename}")
             
             # Even for existing models, we still need to handle symlink conversion
-            # Load config for symlink settings
-            if config_manager is None:
-                from config import ConfigManager
-                config_manager = ConfigManager()
-                config_manager.load_config()
-            
-            raw_config = config_manager.get_raw_config()
-            scanning_config = raw_config.get('scanning', {})
-            preserve_originals = scanning_config.get('preserve_originals', False)
+            # Use passed preserve_originals parameter
             
             # If not preserving originals, convert this duplicate to symlink
             if not preserve_originals:
@@ -1058,7 +1312,10 @@ class ModelHubDB:
                     with open(dest_hash_file, 'w', encoding='utf-8') as f:
                         f.write(hash_to_write)
                     if not quiet:
-                        print(f"Created hash file from {source_method}: {dest_hash_file.name}")
+                        if source_method == "source file":
+                            print(f"📄 Reused hash file from source directory: {dest_hash_file.name}")
+                        else:
+                            print(f"🔢 Generated new hash file: {dest_hash_file.name}")
                 except Exception as e:
                     if not quiet:
                         print(f"Warning: Could not create hash file {dest_hash_file}: {e}")
@@ -1077,15 +1334,13 @@ class ModelHubDB:
         
         # Move or copy file to model-hub based on volume and symlink settings
         try:
-            # Load config for symlink settings
+            # Load config for classification
             if config_manager is None:
                 from config import ConfigManager
                 config_manager = ConfigManager()
                 config_manager.load_config()
             
             raw_config = config_manager.get_raw_config()
-            scanning_config = raw_config.get('scanning', {})
-            preserve_originals = scanning_config.get('preserve_originals', False)
             
             # Check if source and destination are on the same volume
             source_stat = file_path.stat()
@@ -1112,11 +1367,28 @@ class ModelHubDB:
         
         # Create hash file in destination directory
         dest_hash_file = storage_path.parent / (storage_path.stem + '.hash')
+        
+        # Check if we can reuse a hash file from source directory
+        source_hash_file = file_path.parent / (file_path.stem + '.hash')
+        source_method = "generated"
+        
+        if source_hash_file.exists() and source_hash_file.stat().st_size > 0:
+            try:
+                with open(source_hash_file, 'r', encoding='utf-8') as f:
+                    source_hash = f.read().strip()
+                    if source_hash and len(source_hash) == 64 and source_hash == file_hash:  # Valid SHA-256 and matches
+                        source_method = "reused from source"
+            except Exception:
+                pass  # Fall back to generated method
+        
         try:
             with open(dest_hash_file, 'w', encoding='utf-8') as f:
                 f.write(file_hash)
             if not quiet:
-                print(f"Created hash file: {dest_hash_file.name}")
+                if source_method == "reused from source":
+                    print(f"📄 Reused hash file from source directory: {dest_hash_file.name}")
+                else:
+                    print(f"🔢 Generated new hash file: {dest_hash_file.name}")
         except Exception as e:
             if not quiet:
                 print(f"Warning: Could not create hash file {dest_hash_file}: {e}")

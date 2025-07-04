@@ -50,6 +50,7 @@ class ModelHubTUI:
         # UI state
         self.status_message = ""
         self.show_help = False
+        self.symlinks_enabled = True  # Default to symlinks enabled
         
         # Screen dimensions
         self.height = 0
@@ -112,6 +113,8 @@ class ModelHubTUI:
                 self.delete_models()
             elif key == ord('H'):
                 self.generate_hash_files()
+            elif key == ord('Y'):  # Shift+Y to toggle symlinks
+                self.toggle_symlinks()
             elif key == ord('\n') or key == curses.KEY_ENTER:
                 self.show_model_options()
     
@@ -252,7 +255,8 @@ class ModelHubTUI:
         # Status info on left side
         total_models = self.get_total_model_count()
         filtered_models = len(self.models)
-        status_info = f"Page: {self.current_page + 1} | Total: {total_models} | Showing: {filtered_models}"
+        symlinks_status = "on" if self.symlinks_enabled else "off"
+        status_info = f"Page: {self.current_page + 1} | Total: {total_models} | Showing: {filtered_models} | Symlinks: {symlinks_status}"
         self.stdscr.addstr(0, 0, status_info[:49])
         
         
@@ -302,7 +306,7 @@ class ModelHubTUI:
                 pass
         
         # Help line
-        help_line = "↑/↓ Select | PgUp/PgDn Jump | Click/F Filter | n Non-CivitAI | r Reset | R Reclassify | H Hash | D Deploy | h Help | q Quit"
+        help_line = "↑/↓ Select | PgUp/PgDn Jump | Click/F Filter | n Non-CivitAI | r Reset | R Reclassify | H Hash | Y Symlinks | D Deploy | h Help | q Quit"
         try:
             self.stdscr.addstr(self.height-2, 0, help_line[:self.width-1], curses.color_pair(3))
         except curses.error:
@@ -340,6 +344,7 @@ class ModelHubTUI:
             "  'R' - Reclassify models",
             "  'X' - Delete selected models",
             "  'H' - Generate hash files",
+            "  'Y' - Toggle symlinks (on/off)",
             "",
             "Deployment:",
             "  'c' - Configure deploy targets",
@@ -352,6 +357,11 @@ class ModelHubTUI:
             "Other:",
             "  'h' - Toggle this help",
             "  'q' - Quit application",
+            "",
+            "Symlinks:",
+            "  When enabled (default), scanned models replace originals with symlinks",
+            "  When disabled, original files are preserved during scanning",
+            "  Setting resets to 'on' each time the application starts",
             "",
             "Press 'h' to return to main view"
         ]
@@ -475,6 +485,12 @@ class ModelHubTUI:
     def toggle_help(self):
         """Toggle help screen"""
         self.show_help = not self.show_help
+    
+    def toggle_symlinks(self):
+        """Toggle symlinks enabled/disabled"""
+        self.symlinks_enabled = not self.symlinks_enabled
+        status = "on" if self.symlinks_enabled else "off"
+        self.status_message = f"Symlinks: {status}"
     
     def handle_mouse(self):
         """Handle mouse events"""
@@ -1228,7 +1244,9 @@ class ModelHubTUI:
                     print(f"[{i+1}/{len(model_files)}] {file_path.name}")
                     
                     try:
-                        model = self.db.import_model(file_path, model_hub_path, quiet=False, config_manager=self.config)
+                        # Pass the inverse of symlinks_enabled as preserve_originals
+                        preserve_originals = not self.symlinks_enabled
+                        model = self.db.import_model(file_path, model_hub_path, quiet=False, config_manager=self.config, preserve_originals=preserve_originals)
                         if model:
                             # Check if this was a new import (not existing)
                             if model.filename == file_path.name:

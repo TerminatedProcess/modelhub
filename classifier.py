@@ -287,6 +287,12 @@ class CivitAILookup:
             
             primary_type = type_mapping.get(model_type, 'unknown')
             base_model = self.extract_base_model(model_info, version_info)
+            
+            # Improve classification for specific base models
+            if primary_type == 'unknown' and base_model == 'pony':
+                # Pony models are typically checkpoints
+                primary_type = 'checkpoint'
+            
             triggers = self.extract_civitai_triggers(version_info)
             
             return {
@@ -319,6 +325,8 @@ class CivitAILookup:
             return 'sd15'
         elif 'sd 2' in base_model or 'sd2' in base_model:
             return 'sd2'
+        elif 'pony' in base_model:
+            return 'pony'
         elif 'wan' in base_model or 'video' in base_model:
             return 'wan'
         
@@ -330,6 +338,8 @@ class CivitAILookup:
             return 'sdxl'
         elif 'sd3' in name:
             return 'sd3'
+        elif 'pony' in name:
+            return 'pony'
         elif 'wan' in name or 'wanvideo' in name:
             return 'wan'
         elif 'hunyuan' in name:
@@ -352,6 +362,179 @@ class CivitAILookup:
         
         return triggers
 
+class DataDrivenClassificationEngine:
+    """Data-driven classification engine that uses database rules instead of hard-coded logic"""
+    
+    def __init__(self, database):
+        self.database = database
+        self.civitai = None  # Will be initialized as needed
+        
+    def classify_model_data_driven(self, file_path: Path, civitai_data: Dict = None, metadata: Dict = None, 
+                                 filename: str = None, file_size: int = None) -> Dict:
+        """Main data-driven classification method"""
+        import re
+        
+        filename = filename or file_path.name
+        file_size = file_size or (file_path.stat().st_size if file_path.exists() else 0)
+        
+        results = {
+            'primary_type': 'unknown',
+            'base_model': 'unknown', 
+            'sub_type': 'unknown',
+            'confidence': 0.0,
+            'method': 'data_driven',
+            'modifiers': []
+        }
+        
+        # Get classification workflow
+        workflow_steps = self.database.get_classification_workflow()
+        
+        for step in workflow_steps:
+            rule_group = step['rule_group']
+            
+            if rule_group == 'external_api_lookup' and civitai_data:
+                self._apply_external_api_rules(civitai_data, results)
+            elif rule_group == 'base_model_detection':
+                self._apply_base_model_rules(filename, civitai_data, metadata, results)
+            elif rule_group == 'primary_type_detection':
+                self._apply_primary_type_rules(filename, civitai_data, results)
+            elif rule_group == 'sub_type_detection':
+                self._apply_sub_type_rules(results)
+            elif rule_group == 'pattern_modifiers':
+                self._apply_pattern_modifiers(filename, results)
+            elif rule_group == 'file_size_fallback':
+                self._apply_file_size_rules(file_size, results)
+                
+        return results
+    
+    def _apply_external_api_rules(self, civitai_data: Dict, results: Dict):
+        """Apply external API mapping rules"""
+        if not civitai_data:
+            return
+            
+        mappings = self.database.get_external_api_mappings('civitai')
+        
+        for mapping in mappings:
+            api_field = mapping['api_field']
+            api_value = mapping['api_value']
+            modelhub_field = mapping['modelhub_field']
+            modelhub_value = mapping['modelhub_value']
+            confidence = mapping['confidence']
+            
+            # Check if the API data matches this mapping
+            if api_field in civitai_data:
+                if civitai_data[api_field].lower() == api_value.lower():
+                    results[modelhub_field] = modelhub_value
+                    results['confidence'] = max(results['confidence'], confidence)
+                    results['method'] = 'civitai_api'
+    
+    def _apply_base_model_rules(self, filename: str, civitai_data: Dict, metadata: Dict, results: Dict):
+        """Apply base model detection rules"""
+        import re
+        
+        rules = self.database.get_detection_rules(rule_type='base_model')
+        
+        for rule in rules:
+            source_type = rule['source_type']
+            pattern = rule['pattern']
+            output_value = rule['output_value']
+            confidence = rule['confidence']
+            
+            match_found = False
+            
+            if source_type == 'civitai_field' and civitai_data:
+                field = rule['source_field']
+                if field in civitai_data:
+                    if re.search(pattern, civitai_data[field], re.IGNORECASE):
+                        match_found = True
+                        
+            elif source_type == 'filename':
+                if re.search(pattern, filename, re.IGNORECASE):
+                    match_found = True
+                    
+            elif source_type == 'metadata_field' and metadata:
+                field = rule['source_field']
+                if field in metadata:
+                    if re.search(pattern, str(metadata[field]), re.IGNORECASE):
+                        match_found = True
+            
+            if match_found:
+                results['base_model'] = output_value
+                results['confidence'] = max(results['confidence'], confidence)
+                break  # Use first matching rule (ordered by priority)
+    
+    def _apply_primary_type_rules(self, filename: str, civitai_data: Dict, results: Dict):
+        """Apply primary type detection rules"""
+        import re
+        
+        rules = self.database.get_detection_rules(rule_type='primary_type')
+        
+        for rule in rules:
+            source_type = rule['source_type']
+            pattern = rule['pattern']
+            output_value = rule['output_value']
+            confidence = rule['confidence']
+            
+            match_found = False
+            
+            if source_type == 'base_model_conditional':
+                # Special rule type: if base_model matches source_field and current primary_type matches pattern
+                if (results['base_model'] == rule['source_field'] and 
+                    results['primary_type'] == pattern):
+                    match_found = True
+            
+            if match_found:
+                results['primary_type'] = output_value
+                results['confidence'] = max(results['confidence'], confidence)
+                break
+    
+    def _apply_sub_type_rules(self, results: Dict):
+        """Apply sub-type detection rules based on base model and primary type"""
+        # Use existing sub_type_rules logic but from database
+        if results['base_model'] != 'unknown':
+            # For now, use base_model as sub_type (can be enhanced with more complex rules)
+            results['sub_type'] = results['base_model']
+    
+    def _apply_pattern_modifiers(self, filename: str, results: Dict):
+        """Apply pattern modifiers to enhance sub-types"""
+        import re
+        
+        modifiers = self.database.get_pattern_modifiers(
+            applies_to_type=results['primary_type'],
+            applies_to_subtype=results['sub_type']
+        )
+        
+        applied_modifiers = []
+        
+        for modifier in modifiers:
+            pattern = modifier['pattern']
+            suffix = modifier['modifier_suffix']
+            
+            if re.search(pattern, filename, re.IGNORECASE):
+                applied_modifiers.append(suffix)
+        
+        # Apply modifiers to sub_type
+        if applied_modifiers:
+            base_subtype = results['sub_type']
+            results['sub_type'] = base_subtype + ''.join(applied_modifiers)
+            results['modifiers'] = applied_modifiers
+    
+    def _apply_file_size_rules(self, file_size: int, results: Dict):
+        """Apply file size-based classification as fallback"""
+        if results['primary_type'] != 'unknown':
+            return  # Don't override if we already have a type
+            
+        size_rules = self.database.get_size_rules()
+        
+        for model_type, rules in size_rules.items():
+            min_size = rules.get('min_size', 0)
+            max_size = rules.get('max_size', float('inf'))
+            
+            if min_size <= file_size <= max_size:
+                results['primary_type'] = model_type
+                results['confidence'] = max(results['confidence'], 0.3)  # Low confidence for size-only
+                break
+
 class ModelClassifier:
     """Enhanced model classification system with multi-layer analysis"""
     
@@ -365,6 +548,12 @@ class ModelClassifier:
         enable_api = self.class_config.get('enable_external_apis', True)
         self.civitai = CivitAILookup(enable_api=enable_api)
         self.tensor_analyzer = TensorAnalyzer()
+        
+        # Initialize data-driven classification engine
+        if self.database:
+            self.data_driven_engine = DataDrivenClassificationEngine(self.database)
+        else:
+            self.data_driven_engine = None
         
         # Load classification rules
         self.load_classification_rules()
@@ -455,7 +644,36 @@ class ModelClassifier:
                 triggers=override.get('triggers', [])
             )
         
-        # STEP 3: CivitAI API lookup
+        # STEP 3: Data-driven classification (if available)
+        if self.data_driven_engine:
+            if not quiet:
+                print("    Using data-driven classification engine...")
+            
+            # Query CivitAI for external data
+            civitai_result = self.civitai.lookup_by_hash(file_hash)
+            civitai_data = civitai_result if civitai_result.get('found') else None
+            
+            # Extract metadata if available
+            metadata = None
+            if file_path.suffix.lower() == '.safetensors':
+                metadata = SafeTensorsExtractor.extract_metadata(file_path)
+            
+            # Run data-driven classification
+            dd_result = self.data_driven_engine.classify_model_data_driven(
+                file_path, civitai_data, metadata
+            )
+            
+            if dd_result['confidence'] > self.confidence_threshold:
+                return ClassificationResult(
+                    primary_type=dd_result['primary_type'],
+                    sub_type=dd_result['sub_type'],
+                    confidence=dd_result['confidence'],
+                    method=dd_result['method'],
+                    triggers=civitai_data.get('triggers', []) if civitai_data else [],
+                    base_model=dd_result['base_model']
+                )
+        
+        # STEP 4: Fallback to original CivitAI API lookup (for compatibility)
         if not quiet:
             print("    Querying CivitAI API...")
         

@@ -12,6 +12,44 @@ This document provides a comprehensive overview of the ModelHub classification s
 - Enhanced sub-type detection for flux, sd3, sdxl, wan, pony, sd15, and more
 - Complete deployment mapping coverage for all ComfyUI folders
 
+## Classification Database (`classification.db`)
+
+**Location**: `/mnt/llm/model-hub/classification.db`
+
+This separate database stores all classification rules, patterns, and configurations:
+
+### Tables:
+- **model_types**: Primary model type definitions (24 types: checkpoint, lora, vae, etc.)
+- **sub_type_rules**: Pattern-based sub-type classification (flux, sdxl, pony, etc.)
+- **size_rules**: File size ranges for model type detection
+- **architecture_patterns**: Tensor pattern matching rules for deep analysis
+- **external_apis**: External service configurations (CivitAI, etc.)
+
+### Sub-Type Rules Structure:
+```sql
+CREATE TABLE sub_type_rules (
+    id INTEGER PRIMARY KEY,
+    primary_type TEXT NOT NULL,
+    sub_type TEXT NOT NULL,
+    pattern1 TEXT,
+    pattern2 TEXT,
+    pattern3 TEXT,
+    pattern_type TEXT DEFAULT 'filename',
+    confidence REAL DEFAULT 0.5,
+    priority INTEGER DEFAULT 1,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Current Sub-Types by Model Type:
+- **checkpoint**: flux, sdxl, sd3, sd15, pony, wan, upscale, unknown
+- **lora**: flux, sdxl, sd3, sd15, pony, wan, unknown  
+- **controlnet**: flux, sdxl, sd3, sd15, wan, unknown
+- **vae**: flux, sdxl, sd3, sd15, video, unknown
+- **gguf**: quantized_model
+- **ultralytics**: bbox, segm, unknown
+
 **Supported Model Types:**
 - Core: checkpoint, lora, vae, controlnet, unet, gguf
 - Encoders: clip, clip_vision, text_encoder  
