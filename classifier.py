@@ -578,22 +578,16 @@ class ModelClassifier:
         if 'error' in metadata:
             return self.classify_by_size(file_path, file_hash, quiet)
         
-        # GGUF files are typically quantized language models or diffusion models
-        file_size = file_path.stat().st_size
-        tensor_count = metadata.get('tensor_count', 0)
-        
-        # Determine type based on size and tensor count
-        if file_size > 10_000_000_000:  # > 10GB
-            primary_type = 'checkpoint'
-            sub_type = 'gguf_checkpoint'
-        elif file_size > 1_000_000_000:  # > 1GB
-            primary_type = 'gguf'
-            sub_type = 'quantized_model'
-        else:
-            primary_type = 'gguf'
-            sub_type = 'small_model'
+        # All GGUF files are quantized models by definition
+        # File size is already stored separately in the database
+        primary_type = 'gguf'
+        sub_type = 'quantized_model'
         
         confidence = 0.9  # High confidence for GGUF detection
+        
+        # Get file size and tensor count for metadata
+        file_size = file_path.stat().st_size
+        tensor_count = metadata.get('tensor_count', 0)
         
         # Prepare raw metadata for storage
         raw_metadata = {

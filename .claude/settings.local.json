@@ -2,16 +2,7 @@
   "permissions": {
     "allow": [
       "Bash(sqlite3:*)",
-      "Bash(ls:*)",
-      "Bash(git init:*)",
-      "Bash(git add:*)",
-      "Bash(git remote set-url:*)",
-      "Bash(git push:*)",
-      "Bash(grep:*)",
-      "Bash(python3:*)",
-      "Bash(pip install:*)",
-      "Bash(rg:*)",
-      "Bash(python:*)"
+      "Bash(rg:*)"
     ],
     "deny": []
   }

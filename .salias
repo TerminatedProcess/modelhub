@@ -1,4 +1,5 @@
 alias run='mhubd;python modelhub.py'
 alias bkm='mhubd;bp'
 alias vic='mhub;vi config.yaml'
+rm -f nohup.out
 

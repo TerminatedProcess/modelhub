@@ -633,18 +633,18 @@ class ModelHubTUI:
         title = f" {model.filename[:44]} "
         popup_win.addstr(0, 2, title[:popup_width-4], curses.A_BOLD)
         
-        # Menu options - add Copy Triggers for LoRA models
+        # Menu options - reordered with hotkeys
         options = []
         
         # Add Copy Triggers as first option for LoRA models with triggers
         if model.primary_type and 'lora' in model.primary_type.lower() and model.triggers:
-            options.append("Copy Triggers")
+            options.append("Copy (t)riggers")
             
         options.extend([
-            "Re-classify",
-            "View Metadata",
-            "ln -s to clipboard",
-            "Delete"
+            "(l)n -s to clipboard",
+            "(r)e-classify",
+            "(v)iew metadata",
+            "(d)elete model"
         ])
         
         selected_option = 0
@@ -676,6 +676,28 @@ class ModelHubTUI:
             elif key == 27 or key == ord('q'):  # Escape or 'q'
                 del popup_win
                 break
+            # Handle hotkeys
+            elif key == ord('t') or key == ord('T'):  # Copy triggers hotkey
+                if model.primary_type and 'lora' in model.primary_type.lower() and model.triggers:
+                    del popup_win
+                    self.copy_model_triggers(model)
+                    break
+            elif key == ord('l') or key == ord('L'):  # ln -s to clipboard hotkey
+                del popup_win
+                self.copy_symlink_command(model)
+                break
+            elif key == ord('r') or key == ord('R'):  # Re-classify hotkey
+                del popup_win
+                self.reclassify_single_model(model)
+                break
+            elif key == ord('v') or key == ord('V'):  # View metadata hotkey
+                del popup_win
+                self.show_model_details(model)
+                break
+            elif key == ord('d') or key == ord('D'):  # Delete hotkey
+                del popup_win
+                self.delete_single_model(model)
+                break
     
     def handle_model_option(self, model: Model, option_index: int):
         """Handle selected model option"""
@@ -684,15 +706,21 @@ class ModelHubTUI:
         
         if option_index == 0 and has_copy_triggers:  # Copy Triggers (LoRA only - first option)
             self.copy_model_triggers(model)
-        elif option_index == 0 and not has_copy_triggers:  # Re-classify (first option for non-LoRA)
-            self.reclassify_single_model(model)
-        elif option_index == 1:  # Re-classify (second option for LoRA with triggers)
-            self.reclassify_single_model(model)
-        elif option_index == 2:  # View Metadata
-            self.show_model_details(model)
-        elif option_index == 3:  # ln -s to clipboard
+        elif option_index == 0 and not has_copy_triggers:  # ln -s to clipboard (first option for non-LoRA)
             self.copy_symlink_command(model)
-        elif option_index == 4:  # Delete
+        elif option_index == 1 and has_copy_triggers:  # ln -s to clipboard (second option for LoRA with triggers)
+            self.copy_symlink_command(model)
+        elif option_index == 1 and not has_copy_triggers:  # Re-classify (second option for non-LoRA)
+            self.reclassify_single_model(model)
+        elif option_index == 2 and has_copy_triggers:  # Re-classify (third option for LoRA with triggers)
+            self.reclassify_single_model(model)
+        elif option_index == 2 and not has_copy_triggers:  # View Metadata (third option for non-LoRA)
+            self.show_model_details(model)
+        elif option_index == 3 and has_copy_triggers:  # View Metadata (fourth option for LoRA with triggers)
+            self.show_model_details(model)
+        elif option_index == 3 and not has_copy_triggers:  # Delete (fourth option for non-LoRA)
+            self.delete_single_model(model)
+        elif option_index == 4:  # Delete (fifth option for LoRA with triggers)
             self.delete_single_model(model)
     
     def show_model_details(self, model: Model = None):
@@ -830,19 +858,6 @@ class ModelHubTUI:
             for i, trigger in enumerate(triggers, 1):
                 details.append(f"{i:2d}. {trigger}")
             details.append("")
-        
-        # Timestamps
-        details.append("═══ TIMESTAMPS ═══")
-        details.append(f"Classified: {model.classified_at}")
-        details.append(f"Created: {model.created_at}")
-        details.append(f"Updated: {model.updated_at}")
-        details.append("")
-        
-        # Status Flags
-        details.append("═══ STATUS FLAGS ═══")
-        details.append(f"Reclassify Flag: {model.reclassify or 'None'}")
-        details.append(f"Deleted: {'Yes' if model.deleted else 'No'}")
-        details.append("")
         
         # Raw Metadata (comprehensive)
         try:
@@ -1432,20 +1447,28 @@ class ModelHubTUI:
         progress_win.refresh()
         
         try:
-            # Load classifier with APIs disabled for speed during reclassification
+            # Load classifier with full configuration for accurate reclassification
             from classifier import ModelClassifier
             raw_config = self.config.get_raw_config()
-            # Temporarily disable external APIs for faster reclassification
-            fast_config = raw_config.copy()
-            fast_config['classification'] = fast_config.get('classification', {}).copy()
-            fast_config['classification']['enable_external_apis'] = False
-            classifier = ModelClassifier(fast_config, database=self.db)
+            # Use full config including external APIs for best classification accuracy
+            classifier = ModelClassifier(raw_config, database=self.db)
             
             # Get model hub path to find the actual file
             model_hub_path = self.config.get_model_hub_path()
             storage_path = model_hub_path / "models" / model.file_hash / model.filename
             
             if not storage_path.exists():
+                # Show error message in the progress window
+                progress_win.clear()
+                progress_win.box()
+                progress_win.addstr(1, 2, "Error!", curses.A_BOLD)
+                progress_win.addstr(2, 2, f"File not found for {model.filename}")
+                progress_win.addstr(3, 2, "Press any key to continue...")
+                progress_win.refresh()
+                
+                # Wait for user input
+                self.stdscr.getch()
+                
                 del progress_win
                 self.status_message = f"Error: File not found for {model.filename}"
                 return
@@ -1475,6 +1498,18 @@ class ModelHubTUI:
                     triggers_str, classified_at, model.id
                 ))
             
+            # Show completion message in the progress window
+            progress_win.clear()
+            progress_win.box()
+            progress_win.addstr(1, 2, "Reclassification Complete!", curses.A_BOLD)
+            progress_win.addstr(2, 2, f"Result: {classification.primary_type}/{classification.sub_type}")
+            progress_win.addstr(3, 2, f"Confidence: {classification.confidence:.2f}")
+            progress_win.addstr(4, 2, "Press any key to continue...")
+            progress_win.refresh()
+            
+            # Wait for user input
+            self.stdscr.getch()
+            
             # Close progress window
             del progress_win
             
@@ -1484,6 +1519,18 @@ class ModelHubTUI:
             self.status_message = f"Reclassified: {model.filename} -> {classification.primary_type}/{classification.sub_type} ({classification.confidence:.2f})"
             
         except Exception as e:
+            # Show error message in the progress window
+            progress_win.clear()
+            progress_win.box()
+            progress_win.addstr(1, 2, "Error!", curses.A_BOLD)
+            progress_win.addstr(2, 2, f"Error reclassifying {model.filename}")
+            progress_win.addstr(3, 2, f"{str(e)[:50]}")
+            progress_win.addstr(4, 2, "Press any key to continue...")
+            progress_win.refresh()
+            
+            # Wait for user input
+            self.stdscr.getch()
+            
             del progress_win
             self.status_message = f"Error reclassifying {model.filename}: {e}"
     
