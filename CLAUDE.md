@@ -17,10 +17,13 @@ ModelHub is a comprehensive AI model classification and deployment system that a
 - **clipboard_utils.py** - Cross-platform clipboard integration
 
 ### Database Architecture
-- **Primary Database**: SQLite at path specified in config.yaml (`model_hub.path`)
+- **Dual Database System**: Separated concerns between model data and classification rules
+  - **Main Database**: `{model_hub_path}/modelhub.db` - Model records, metadata, deployments
+  - **Classification Database**: `{model_hub_path}/classification.db` - Rules, patterns, configurations
 - **Main Tables**: `models`, `model_metadata`, `deploy_targets`, `deploy_mappings`, `deploy_links`
 - **Classification Tables**: `model_types`, `size_rules`, `sub_type_rules`, `architecture_patterns`
 - **Hash-based Storage**: Models stored in `{model_hub_path}/models/{hash}/` directories
+- **Development Database**: `./modelhub.db` in project root (empty, for development)
 
 ### Classification System
 Multi-layer classification with weighted scoring:
@@ -58,11 +61,28 @@ sqlite3 $(python3 -c "from config import ConfigManager; print(ConfigManager('con
 
 ### Development Setup
 ```bash
+# Activate virtual environment (if using direnv)
+# direnv allow (sets up venv automatically)
+
+# Manual venv activation
+source venv/bin/activate
+
 # Install dependencies
 pip3 install -r requirements.txt
 
 # Create deployment configuration
 python3 hold/create_default_deploy.py
+```
+
+### Development Shortcuts
+```bash
+# Common aliases (from .salias)
+alias run='mhubd;python modelhub.py'  # Quick run command
+alias vic='mhub;vi config.yaml'       # Edit config
+
+# Direct execution
+python3 modelhub.py                   # Launch TUI
+python3 hold/modelhub_cli.py stats    # Legacy CLI stats
 ```
 
 ## Configuration
@@ -105,6 +125,13 @@ Four preconfigured deployment targets (disabled by default):
 - **Hash Deduplication**: `file_hash` column with unique constraint prevents duplicates
 - **Soft Deletion**: Models marked as deleted rather than removed
 
+### Legacy Components
+- **hold/ Directory**: Contains legacy CLI and utility scripts
+  - `modelhub_cli.py`: Original CLI interface (still functional)
+  - `create_default_deploy.py`: Deployment configuration setup
+  - `db_update.py`: Database migration utilities
+  - `hubclassify.py`: Standalone classification tool
+
 ## File Organization
 
 ### Storage Structure
@@ -132,6 +159,9 @@ Models deployed via symlinks from hash storage to target applications:
 
 ## Dependencies
 
+### Python Version Requirement
+- **Python 3.10+** (Project uses Python 3.12.10)
+
 ### Required Python Packages
 - **PyYAML**: Configuration file parsing
 - **requests**: External API integration
@@ -143,6 +173,10 @@ Models deployed via symlinks from hash storage to target applications:
 - **pathlib**: Modern path handling
 - **hashlib**: File hashing for deduplication
 - **dataclasses**: Type-safe data structures
+
+### Development Environment
+- **Virtual Environment**: Use `venv/` directory for isolated dependencies
+- **Environment Setup**: Project uses `.envrc` with direnv for automatic venv activation
 
 ## Testing and Validation
 
@@ -167,3 +201,20 @@ python3 -c "from classifier import ModelClassifier; from pathlib import Path; cl
 - **Database Injection Protection**: Parameterized queries throughout
 - **Safe File Operations**: Proper error handling for file system operations
 - **External API Rate Limiting**: Built-in delays for API calls
+
+## Additional Documentation
+
+### Classification System Deep Dive
+- **ClassifyLogic.md**: Comprehensive documentation of the classification system
+  - Dual database architecture details
+  - 24+ model types with ComfyUI alignment
+  - Sub-type detection patterns (flux, sd3, sdxl, pony, etc.)
+  - Tensor analysis and architecture patterns
+  - External API integration details
+
+### Project Status and Roadmap
+- **README.md**: Current project status, feature roadmap, and development notes
+  - Production statistics (539+ models classified)
+  - Feature implementation status
+  - Technical architecture overview
+  - Usage examples and hotkey references

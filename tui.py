@@ -1393,7 +1393,7 @@ class ModelHubTUI:
                         continue
                     
                     # Reclassify using current logic with existing hash (skip hash recalculation)
-                    classification = classifier.classify_model(storage_path, model.file_hash, quiet=True)
+                    classification = classifier.classify_model(storage_path, model.file_hash, quiet=True, model_id=model.id)
                     
                     # Prepare trigger words for database storage
                     triggers_str = ", ".join(classification.triggers) if classification.triggers else None
@@ -1416,6 +1416,14 @@ class ModelHubTUI:
                             classification.tensor_count, classification.architecture,
                             triggers_str, classified_at, model.id
                         ))
+                    
+                    # Store raw metadata if available from fresh analysis
+                    if hasattr(classification, 'raw_metadata') and classification.raw_metadata:
+                        try:
+                            self.db.store_model_metadata(model.id, classification.raw_metadata)
+                            print(f"    📊 Stored fresh metadata ({len(classification.raw_metadata)} entries)")
+                        except Exception as e:
+                            print(f"    ⚠️  Warning: Failed to store metadata: {e}")
                     
                     print(f"  ✓ Reclassified: {classification.primary_type}/{classification.sub_type} ({classification.confidence:.2f})")
                     reclassified_count += 1
@@ -1495,7 +1503,7 @@ class ModelHubTUI:
                 return
             
             # Reclassify using current logic with existing hash (skip hash recalculation)
-            classification = classifier.classify_model(storage_path, model.file_hash, quiet=True)
+            classification = classifier.classify_model(storage_path, model.file_hash, quiet=True, model_id=model.id)
             
             # Prepare trigger words for database storage
             triggers_str = ", ".join(classification.triggers) if classification.triggers else None
@@ -1518,6 +1526,14 @@ class ModelHubTUI:
                     classification.tensor_count, classification.architecture,
                     triggers_str, classified_at, model.id
                 ))
+            
+            # Store raw metadata if available from fresh analysis
+            if hasattr(classification, 'raw_metadata') and classification.raw_metadata:
+                try:
+                    self.db.store_model_metadata(model.id, classification.raw_metadata)
+                except Exception as e:
+                    if not quiet:
+                        print(f"Warning: Failed to store fresh metadata: {e}")
             
             # Show completion message in the progress window
             progress_win.clear()
@@ -1834,6 +1850,86 @@ class ModelHubTUI:
     
     # Cleanup operations (STUB)
     def cleanup_menu(self):
-        """Show cleanup menu (STUB)"""
-        self.status_message = "Cleanup menu - STUB"
-        # TODO: Implement cleanup menu
+        """Show cleanup options menu"""
+        # Create popup window
+        popup_height = 8
+        popup_width = 50
+        popup_y = self.height // 2 - popup_height // 2
+        popup_x = self.width // 2 - popup_width // 2
+        
+        popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
+        popup_win.box()
+        
+        # Show title
+        title = " Cleanup Options "
+        popup_win.addstr(0, 2, title, curses.A_BOLD)
+        
+        # Menu options
+        options = [
+            "(R)emove Deleted Models"
+        ]
+        
+        selected_option = 0
+        
+        while True:
+            # Clear content area
+            for i in range(1, popup_height - 1):
+                popup_win.addstr(i, 1, " " * (popup_width - 2))
+            
+            # Draw options
+            for i, option in enumerate(options):
+                y = 2 + i
+                attr = curses.color_pair(2) if i == selected_option else 0
+                popup_win.addstr(y, 3, f"{option}", attr)
+            
+            # Instructions
+            popup_win.addstr(popup_height - 2, 2, "Enter to select, Esc/q to cancel")
+            
+            popup_win.refresh()
+            
+            # Handle input
+            key = self.stdscr.getch()
+            
+            if key == curses.KEY_UP and selected_option > 0:
+                selected_option -= 1
+            elif key == curses.KEY_DOWN and selected_option < len(options) - 1:
+                selected_option += 1
+            elif key == ord('\n') or key == curses.KEY_ENTER:
+                del popup_win
+                self.handle_cleanup_option(selected_option)
+                break
+            elif key == ord('r') or key == ord('R'):
+                del popup_win
+                self.handle_cleanup_option(0)  # Remove deleted models
+                break
+            elif key == 27 or key == ord('q'):  # Escape or 'q'
+                del popup_win
+                break
+    
+    def handle_cleanup_option(self, option_index: int):
+        """Handle selected cleanup option"""
+        if option_index == 0:  # Remove Deleted Models
+            self.remove_deleted_models()
+    
+    def remove_deleted_models(self):
+        """Remove deleted models and cleanup orphaned files"""
+        try:
+            # Get model hub path
+            model_hub_path = self.config.get_model_hub_path()
+            
+            # Perform cleanup operations
+            result = self.db.cleanup_models(model_hub_path)
+            
+            # Display results
+            deleted_count = result.get('deleted_records_removed', 0)
+            orphaned_count = result.get('orphaned_records_removed', 0)
+            reverse_orphan_count = result.get('reverse_orphans_moved', 0)
+            
+            message = f"Cleanup completed: {deleted_count} deleted records, {orphaned_count} orphaned records, {reverse_orphan_count} reverse orphans"
+            self.status_message = message
+            
+            # Reload models to reflect changes
+            self.load_models()
+            
+        except Exception as e:
+            self.status_message = f"Cleanup failed: {str(e)}"

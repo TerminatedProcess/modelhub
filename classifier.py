@@ -105,6 +105,10 @@ class SafeTensorsExtractor:
                     'tensor_names': list(tensors.keys())
                 }
                 
+        except UnicodeDecodeError as e:
+            return {'error': f'SafeTensors header encoding error: {e}'}
+        except json.JSONDecodeError as e:
+            return {'error': f'SafeTensors header JSON parse error: {e}'}
         except Exception as e:
             return {'error': f'SafeTensors extraction failed: {e}'}
 
@@ -146,7 +150,15 @@ class TensorAnalyzer:
                 r'.*\.lora_down\..*', 
                 r'.*\.alpha$',
                 r'.*lora_A\..*',
-                r'.*lora_B\..*'
+                r'.*lora_B\..*',
+                r'.*\.hada_w1_.*',
+                r'.*\.hada_w2_.*',
+                r'.*\.lora_.*\.weight$',
+                r'.*\.lora_.*\.bias$',
+                r'.*lora_down$',
+                r'.*lora_up$',
+                r'.*\.locon_.*',
+                r'.*\.lokr_.*'
             ],
             'flux': [
                 'double_blocks',
@@ -603,7 +615,7 @@ class ModelClassifier:
         self.external_apis = [('civitai', True, 1, 1.0, 10)]
         self.model_types = [('checkpoint', 'Checkpoint'), ('lora', 'LoRA'), ('vae', 'VAE')]
 
-    def classify_model(self, file_path: Path, file_hash: str = None, quiet: bool = False) -> ClassificationResult:
+    def classify_model(self, file_path: Path, file_hash: str = None, quiet: bool = False, model_id: int = None) -> ClassificationResult:
         """Classify a model using multi-layer analysis"""
         
         # Check for LFS pointer files
@@ -627,6 +639,18 @@ class ModelClassifier:
                 method="failed"
             )
         
+        # Check if this is a reclassification without raw metadata
+        force_fresh_analysis = False
+        if model_id and self.database:
+            try:
+                existing_metadata = self.database.get_model_metadata_dict(model_id)
+                if not existing_metadata:
+                    force_fresh_analysis = True
+                    if not quiet:
+                        print("    No raw metadata found - performing fresh analysis...")
+            except Exception:
+                force_fresh_analysis = True
+        
         # STEP 1: Check for GGUF files first
         if file_path.suffix.lower() == '.gguf':
             return self.classify_gguf(file_path, file_hash, quiet)
@@ -644,8 +668,8 @@ class ModelClassifier:
                 triggers=override.get('triggers', [])
             )
         
-        # STEP 3: Data-driven classification (if available)
-        if self.data_driven_engine:
+        # STEP 3: Data-driven classification (if available and not forcing fresh analysis)
+        if self.data_driven_engine and not force_fresh_analysis:
             if not quiet:
                 print("    Using data-driven classification engine...")
             
@@ -673,30 +697,31 @@ class ModelClassifier:
                     base_model=dd_result['base_model']
                 )
         
-        # STEP 4: Fallback to original CivitAI API lookup (for compatibility)
-        if not quiet:
-            print("    Querying CivitAI API...")
-        
-        civitai_result = self.civitai.lookup_by_hash(file_hash)
-        if civitai_result.get('found'):
-            primary_type = civitai_result['primary_type']
-            base_model = civitai_result['base_model']
-            sub_type = self.determine_sub_type(primary_type, base_model, file_path.name)
-            
+        # STEP 4: Fallback to original CivitAI API lookup (for compatibility, but not when forcing fresh analysis)
+        if not force_fresh_analysis:
             if not quiet:
-                print(f"    CivitAI: {civitai_result.get('name', 'Unknown')} ({primary_type})")
+                print("    Querying CivitAI API...")
             
-            # Store raw CivitAI data for later metadata storage
-            classification_result = ClassificationResult(
-                primary_type=primary_type,
-                sub_type=sub_type,
-                confidence=civitai_result['confidence'],
-                method="civitai_api",
-                base_model=base_model,
-                triggers=civitai_result.get('triggers', [])
-            )
-            classification_result.raw_metadata = {'civitai_response': civitai_result}
-            return classification_result
+            civitai_result = self.civitai.lookup_by_hash(file_hash)
+            if civitai_result.get('found'):
+                primary_type = civitai_result['primary_type']
+                base_model = civitai_result['base_model']
+                sub_type = self.determine_sub_type(primary_type, base_model, file_path.name)
+                
+                if not quiet:
+                    print(f"    CivitAI: {civitai_result.get('name', 'Unknown')} ({primary_type})")
+                
+                # Store raw CivitAI data for later metadata storage
+                classification_result = ClassificationResult(
+                    primary_type=primary_type,
+                    sub_type=sub_type,
+                    confidence=civitai_result['confidence'],
+                    method="civitai_api",
+                    base_model=base_model,
+                    triggers=civitai_result.get('triggers', [])
+                )
+                classification_result.raw_metadata = {'civitai_response': civitai_result}
+                return classification_result
         
         # STEP 4: SafeTensors metadata analysis
         if file_path.suffix.lower() == '.safetensors':
@@ -731,12 +756,34 @@ class ModelClassifier:
         metadata_score = self.calculate_metadata_score(st_metadata)
         
         # Determine primary type based on highest tensor score
-        if tensor_scores:
+        has_meaningful_tensor_scores = tensor_scores and max(tensor_scores.values()) > 0.0
+        if has_meaningful_tensor_scores:
             primary_type = max(tensor_scores.items(), key=lambda x: x[1])[0]
             confidence = tensor_scores[primary_type]
         else:
-            # Fallback to size-based classification
-            primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size)
+            # Tensor analysis failed or all scores are 0 - use filename-based detection first
+            filename_lower = file_path.name.lower()
+            
+            # Always prioritize strong filename indicators for common model types
+            if 'lora' in filename_lower:
+                primary_type = 'lora'
+                confidence = max(filename_score, 0.8)  # Ensure minimum confidence
+            elif 'controlnet' in filename_lower or 'control_' in filename_lower:
+                primary_type = 'controlnet'
+                confidence = max(filename_score, 0.8)
+            elif 'vae' in filename_lower:
+                primary_type = 'vae'
+                confidence = max(filename_score, 0.8)
+            elif 'embedding' in filename_lower or 'textual_inversion' in filename_lower:
+                primary_type = 'embedding'
+                confidence = max(filename_score, 0.8)
+            elif filename_score >= 0.8:  # Other high confidence filename matches
+                # This catches cases like 'checkpoint', 'ip-adapter', etc.
+                primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size)
+                confidence = max(confidence, filename_score)
+            else:
+                # Fallback to size-based classification
+                primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size)
         
         # Calculate weighted confidence
         weighted_confidence = (
@@ -760,6 +807,11 @@ class ModelClassifier:
         
         if not quiet:
             print(f"    SafeTensors: {primary_type} (confidence: {final_confidence:.2f})")
+            if tensor_scores:
+                print(f"    Tensor scores: {dict(sorted(tensor_scores.items(), key=lambda x: x[1], reverse=True))}")
+            print(f"    Filename score: {filename_score:.2f}, Size score: {size_score:.2f}")
+            print(f"    Has meaningful tensor scores: {has_meaningful_tensor_scores}")
+            print(f"    Used filename-based detection: {not has_meaningful_tensor_scores and filename_score >= 0.8}")
             if triggers:
                 print(f"    Triggers: {', '.join(triggers)}")
         

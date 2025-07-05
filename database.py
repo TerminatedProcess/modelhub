@@ -1583,3 +1583,77 @@ class ModelHubDB:
             print(f"Processed {files_processed} models, created {files_created} hash files")
         
         return files_processed, files_created
+    
+    def cleanup_models(self, model_hub_path: Path) -> Dict[str, int]:
+        """
+        Comprehensive cleanup of model database and files
+        Returns dict with cleanup statistics
+        """
+        results = {
+            'deleted_records_removed': 0,
+            'orphaned_records_removed': 0,
+            'reverse_orphans_moved': 0
+        }
+        
+        models_path = model_hub_path / 'models'
+        review_path = model_hub_path / 'review'
+        
+        # Create review directory if it doesn't exist
+        review_path.mkdir(exist_ok=True)
+        
+        # 1. Remove deleted records and move their hash folders
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT file_hash FROM models WHERE deleted = 1")
+        deleted_hashes = [row[0] for row in cursor.fetchall()]
+        
+        for file_hash in deleted_hashes:
+            hash_dir = models_path / file_hash
+            if hash_dir.exists():
+                # Move to review folder
+                review_hash_dir = review_path / file_hash
+                try:
+                    if review_hash_dir.exists():
+                        shutil.rmtree(review_hash_dir)
+                    shutil.move(str(hash_dir), str(review_hash_dir))
+                except Exception as e:
+                    print(f"Error moving deleted model {file_hash}: {e}")
+                    continue
+            
+            # Remove from database
+            cursor.execute("DELETE FROM models WHERE file_hash = ?", (file_hash,))
+            results['deleted_records_removed'] += 1
+        
+        # 2. Find and remove orphaned records (DB records without files)
+        cursor.execute("SELECT file_hash FROM models WHERE deleted = 0")
+        active_hashes = [row[0] for row in cursor.fetchall()]
+        
+        for file_hash in active_hashes:
+            hash_dir = models_path / file_hash
+            if not hash_dir.exists():
+                # No corresponding file, remove from database
+                cursor.execute("DELETE FROM models WHERE file_hash = ?", (file_hash,))
+                results['orphaned_records_removed'] += 1
+        
+        # 3. Find reverse orphans (hash folders without DB records)
+        if models_path.exists():
+            existing_hash_dirs = [d.name for d in models_path.iterdir() if d.is_dir()]
+            cursor.execute("SELECT file_hash FROM models")
+            db_hashes = set(row[0] for row in cursor.fetchall())
+            
+            for hash_dir_name in existing_hash_dirs:
+                if hash_dir_name not in db_hashes:
+                    # This is a reverse orphan - move to review
+                    hash_dir = models_path / hash_dir_name
+                    review_hash_dir = review_path / hash_dir_name
+                    try:
+                        if review_hash_dir.exists():
+                            shutil.rmtree(review_hash_dir)
+                        shutil.move(str(hash_dir), str(review_hash_dir))
+                        results['reverse_orphans_moved'] += 1
+                    except Exception as e:
+                        print(f"Error moving reverse orphan {hash_dir_name}: {e}")
+        
+        # Commit all changes
+        self.conn.commit()
+        
+        return results
