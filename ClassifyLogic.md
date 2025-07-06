@@ -65,33 +65,59 @@ CREATE TABLE sub_type_rules (
 ### **Entry Points and Flow**:
 
 #### **1. Primary Entry Point** - `classify_model()` method
-**Location**: `classifier.py:417-488`
+**Location**: `classifier.py:699-895`
 
-This is the main method that orchestrates the entire classification process:
+This is the main method that orchestrates the entire classification process with comprehensive debug logging:
 
 ```python
-def classify_model(self, file_path: Path, file_hash: str = None, quiet: bool = False) -> ClassificationResult:
+def classify_model(self, file_path: Path, file_hash: str = None, quiet: bool = False, model_id: int = None) -> ClassificationResult:
 ```
 
 #### **2. Classification Process Flow**:
 
-1. **LFS Check** (`classifier.py:425-431`)
+The classification system follows a strict 7-step process with comprehensive debug logging:
+
+1. **LFS Pointer Detection** (`classifier.py:735-750`)
    - Checks if file is an undownloaded Git LFS pointer
+   - Returns immediately if LFS pointer detected
 
-2. **GGUF Special Handling** (`classifier.py:433-442`)
+2. **GGUF Special Handling** (`classifier.py:752-765`)
    - Special processing for GGUF quantized models
+   - Returns immediately if GGUF file detected
 
-3. **Manual Override Check** (`classifier.py:444-451`)
+3. **Manual Overrides** (`classifier.py:767-790`)
+   - **Status**: Stubbed (basic config check only)
    - Checks config for explicit model classifications
+   - Full manual override system planned for future development
 
-4. **CivitAI API Lookup** (`classifier.py:453-461`)
-   - Queries external API for model metadata if enabled
+4. **Data-Driven Classification Engine** (`classifier.py:792-835`)
+   - **Status**: Active (database-driven rules system)
+   - Uses classification rules stored in `classification.db`
+   - Includes CivitAI lookup for external data
+   - Returns result if confidence exceeds threshold
 
-5. **SafeTensors Analysis** (`classifier.py:463-475`)
-   - Extracts and analyzes tensor metadata
+5. **CivitAI API Lookup** (`classifier.py:837-865`)
+   - **Status**: Always executes (no conditional skipping)
+   - Queries external API for model metadata
+   - Returns result if model found in CivitAI database
 
-6. **Final Classification** (`classifier.py:477-488`)
-   - Combines all scoring methods and returns result
+6. **SafeTensors Analysis** (`classifier.py:867-885`)
+   - Extracts and analyzes tensor metadata for .safetensors files
+   - Uses tensor patterns and metadata extraction
+
+7. **Size-based Fallback** (`classifier.py:887-895`)
+   - Final fallback using file size analysis
+   - Ensures every model gets classified
+
+#### **3. Intelligent Reclassification System**:
+
+The system uses different approaches based on existing metadata:
+
+- **New Models**: Full 7-step classification process
+- **Reclassification with existing metadata**: Efficient cached approach using stored data
+- **Reclassification with missing/corrupted metadata**: Treated as new model (full 7-step process)
+
+This approach ensures efficiency while handling edge cases like parse errors or corrupted metadata.
 
 ### **Key Components**:
 
@@ -168,10 +194,13 @@ def classify_model(self, file_path: Path, file_hash: str = None, quiet: bool = F
 **Classification Steps**:
 1. **LFS Pointer Detection** - Checks for undownloaded Git LFS files
 2. **GGUF File Handling** - Special handling for GGUF quantized models
-3. **Manual Overrides** - Checks configuration for explicit model classifications
-4. **CivitAI API Lookup** - Queries external API for model metadata
-5. **SafeTensors Analysis** - Extracts and analyzes tensor metadata
-6. **Size-based Fallback** - Uses file size as final classification method
+3. **Manual Overrides** - Checks configuration for explicit model classifications (stubbed)
+4. **Data-Driven Classification Engine** - Database-driven rules system (active)
+5. **CivitAI API Lookup** - Queries external API for model metadata (always executes)
+6. **SafeTensors Analysis** - Extracts and analyzes tensor metadata
+7. **Size-based Fallback** - Uses file size as final classification method
+
+**Debug Logging**: Every step is logged with comprehensive debug information, ensuring debug_info is never empty after classification.
 
 ### 3. **Classification Entry Points**
 
@@ -264,15 +293,32 @@ The classifier uses a weighted scoring system:
 - **Tensor Score** (50%): Based on tensor analysis (most reliable)
 - **Metadata Score** (10%): Based on SafeTensors metadata
 
-### 7. **Key Features**
+### 7. **Debug Information System**
+
+Every classification generates comprehensive debug information stored in the `debug_info` field:
+
+- **Classification Steps**: Complete audit trail of each step executed
+- **External API Results**: CivitAI lookup results and status
+- **Tensor Analysis**: Pattern matching results and scores
+- **File Analysis**: Size, extension, and filename indicators
+- **Error Tracking**: Any errors encountered during classification
+- **Metadata Extraction**: Results from SafeTensors/GGUF parsing
+- **Classification Time**: Timestamp and classifier version
+
+This provides complete visibility into the classification process for debugging and analysis.
+
+### 8. **Key Features**
 
 1. **Multi-format Support**: SafeTensors, GGUF, legacy formats
-2. **External API Integration**: CivitAI lookup with caching
+2. **External API Integration**: CivitAI lookup with caching (always executes)
 3. **Trigger Word Extraction**: Automatic extraction from metadata
 4. **Architecture Detection**: Advanced tensor pattern analysis
 5. **Fallback Mechanisms**: Multiple classification methods
 6. **Database Integration**: Persistent storage of classification rules
 7. **Performance Optimization**: Hash-based deduplication and caching
+8. **Comprehensive Debug Logging**: Complete audit trail for every classification
+9. **Intelligent Reclassification**: Efficient handling of existing vs. missing metadata
+10. **Error Recovery**: Automatic handling of parse errors and corrupted metadata
 
 ## Summary of Process Start
 

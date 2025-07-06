@@ -172,7 +172,7 @@ class ModelHubTUI:
                        primary_type, sub_type, confidence, classification_method,
                        tensor_count, architecture, precision, quantization,
                        triggers, filename_score, size_score, metadata_score,
-                       tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+                       tensor_score, classified_at, created_at, updated_at, reclassify, deleted, debug_info
                 FROM models
                 WHERE {' AND '.join(all_conditions)}
                 ORDER BY {self.get_sort_expression()} {self.sort_order}
@@ -191,7 +191,7 @@ class ModelHubTUI:
                        primary_type, sub_type, confidence, classification_method,
                        tensor_count, architecture, precision, quantization,
                        triggers, filename_score, size_score, metadata_score,
-                       tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+                       tensor_score, classified_at, created_at, updated_at, reclassify, deleted, debug_info
                 FROM models
                 WHERE deleted = 0
                 ORDER BY {self.get_sort_expression()} {self.sort_order}
@@ -990,6 +990,83 @@ class ModelHubTUI:
             details.append(f"Error retrieving metadata: {e}")
             details.append("")
         
+        # Add debug information at the bottom
+        if model.debug_info:
+            details.append("═══ CLASSIFICATION DEBUG INFO ═══")
+            try:
+                import json
+                debug_data = json.loads(model.debug_info)
+                
+                # Show classification steps
+                if debug_data.get('classification_steps'):
+                    details.append("--- Classification Steps ---")
+                    for i, step in enumerate(debug_data['classification_steps'], 1):
+                        step_str = f"{i}. {step['step']}: {step['status']}"
+                        if step.get('error'):
+                            step_str += f" (Error: {step['error']})"
+                        elif step.get('detected'):
+                            step_str += f" (Detected: {step['detected']})"
+                        elif step.get('reason'):
+                            step_str += f" (Reason: {step['reason']})"
+                        details.append(step_str)
+                    details.append("")
+                
+                # Show scores
+                if debug_data.get('scores'):
+                    details.append("--- Classification Scores ---")
+                    scores = debug_data['scores']
+                    for score_name, score_value in scores.items():
+                        details.append(f"{score_name.replace('_', ' ').title()}: {score_value:.3f}")
+                    details.append("")
+                
+                # Show tensor analysis summary
+                if debug_data.get('tensor_analysis'):
+                    details.append("--- Tensor Analysis Summary ---")
+                    ta = debug_data['tensor_analysis']
+                    details.append(f"Tensor Count: {ta.get('tensor_count', 0)}")
+                    details.append(f"Patterns Checked: {ta.get('patterns_checked', 0)}")
+                    details.append(f"Highest Pattern Score: {ta.get('highest_score', 0.0):.3f}")
+                    
+                    if ta.get('pattern_matches'):
+                        details.append("Top Pattern Matches:")
+                        sorted_patterns = sorted(ta['pattern_matches'].items(), key=lambda x: x[1], reverse=True)
+                        for pattern, score in sorted_patterns[:5]:  # Show top 5
+                            if score > 0:
+                                details.append(f"  {pattern}: {score:.3f}")
+                    details.append("")
+                
+                # Show file analysis
+                if debug_data.get('file_analysis'):
+                    details.append("--- File Analysis ---")
+                    fa = debug_data['file_analysis']
+                    details.append(f"File Size: {fa.get('size_mb', 0)} MB")
+                    details.append(f"Extension: {fa.get('extension', 'unknown')}")
+                    if fa.get('filename_indicators'):
+                        details.append(f"Filename Indicators: {', '.join(fa['filename_indicators'])}")
+                    details.append("")
+                
+                # Show errors if any
+                if debug_data.get('errors'):
+                    details.append("--- Errors Encountered ---")
+                    for error in debug_data['errors']:
+                        details.append(f"• {error}")
+                    details.append("")
+                
+                # Show metadata
+                details.append("--- Debug Metadata ---")
+                details.append(f"Classification Time: {debug_data.get('classification_time', 'unknown')}")
+                details.append(f"Classifier Version: {debug_data.get('classifier_version', 'unknown')}")
+                
+            except json.JSONDecodeError:
+                details.append("Debug info format error - unable to parse JSON")
+            except Exception as e:
+                details.append(f"Error displaying debug info: {e}")
+        else:
+            details.append("═══ NO DEBUG INFO AVAILABLE ═══")
+            details.append("No debug information found for this model.")
+            details.append("This may indicate the model was classified before")
+            details.append("the debug system was implemented.")
+        
         return details
     
     def copy_model_triggers(self, model: Model):
@@ -1346,7 +1423,7 @@ class ModelHubTUI:
                    primary_type, sub_type, confidence, classification_method,
                    tensor_count, architecture, precision, quantization,
                    triggers, filename_score, size_score, metadata_score,
-                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted, debug_info
             FROM models
             {where_clause}
             ORDER BY filename ASC
@@ -1407,14 +1484,14 @@ class ModelHubTUI:
                             UPDATE models SET 
                                 primary_type = ?, sub_type = ?, confidence = ?, 
                                 classification_method = ?, tensor_count = ?, 
-                                architecture = ?, triggers = ?, classified_at = ?,
+                                architecture = ?, triggers = ?, classified_at = ?, debug_info = ?,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE id = ?
                         """, (
                             classification.primary_type, classification.sub_type, 
                             classification.confidence, classification.method,
                             classification.tensor_count, classification.architecture,
-                            triggers_str, classified_at, model.id
+                            triggers_str, classified_at, getattr(classification, 'debug_info', None), model.id
                         ))
                     
                     # Store raw metadata if available from fresh analysis
@@ -1517,14 +1594,14 @@ class ModelHubTUI:
                     UPDATE models SET 
                         primary_type = ?, sub_type = ?, confidence = ?, 
                         classification_method = ?, tensor_count = ?, 
-                        architecture = ?, triggers = ?, classified_at = ?,
+                        architecture = ?, triggers = ?, classified_at = ?, debug_info = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                 """, (
                     classification.primary_type, classification.sub_type, 
                     classification.confidence, classification.method,
                     classification.tensor_count, classification.architecture,
-                    triggers_str, classified_at, model.id
+                    triggers_str, classified_at, getattr(classification, 'debug_info', None), model.id
                 ))
             
             # Store raw metadata if available from fresh analysis

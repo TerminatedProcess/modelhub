@@ -15,8 +15,86 @@ import time
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+
+@dataclass
+class ClassificationDebugger:
+    """Collects debug information during model classification"""
+    classification_steps: List[Dict] = field(default_factory=list)
+    scores: Dict[str, float] = field(default_factory=dict)
+    tensor_analysis: Dict = field(default_factory=dict)
+    file_analysis: Dict = field(default_factory=dict)
+    external_api: Dict = field(default_factory=dict)
+    errors: List[str] = field(default_factory=list)
+    classification_time: str = field(default_factory=lambda: datetime.now().isoformat())
+    classifier_version: str = "enhanced_v1.3"
+    
+    def add_step(self, step: str, status: str, **kwargs):
+        """Add a classification step with status and additional info"""
+        step_info = {"step": step, "status": status}
+        step_info.update(kwargs)
+        self.classification_steps.append(step_info)
+    
+    def add_error(self, error: str):
+        """Add an error message"""
+        self.errors.append(error)
+    
+    def set_scores(self, filename_score: float = 0.0, size_score: float = 0.0, 
+                  tensor_score: float = 0.0, metadata_score: float = 0.0):
+        """Set classification scores"""
+        self.scores = {
+            "filename_score": filename_score,
+            "size_score": size_score,
+            "tensor_score": tensor_score,
+            "metadata_score": metadata_score
+        }
+    
+    def set_tensor_analysis(self, tensor_count: int, tensor_scores: Dict[str, float], 
+                           tensor_names: List[str] = None):
+        """Set tensor analysis results"""
+        self.tensor_analysis = {
+            "tensor_count": tensor_count,
+            "patterns_checked": len(tensor_scores) if tensor_scores else 0,
+            "pattern_matches": tensor_scores or {},
+            "highest_score": max(tensor_scores.values()) if tensor_scores else 0.0,
+            "tensor_names_count": len(tensor_names) if tensor_names else 0
+        }
+    
+    def set_file_analysis(self, file_size: int, extension: str, filename: str):
+        """Set file analysis info"""
+        filename_lower = filename.lower()
+        indicators = []
+        for indicator in ['lora', 'flux', 'controlnet', 'vae', 'embedding', 'checkpoint', 'sdxl', 'sd15', 'sd3', 'pony']:
+            if indicator in filename_lower:
+                indicators.append(indicator)
+        
+        self.file_analysis = {
+            "size_mb": round(file_size / (1024 * 1024), 1),
+            "extension": extension,
+            "filename_indicators": indicators
+        }
+    
+    def set_external_api_info(self, attempted: bool, result: Dict = None, reason: str = None):
+        """Set external API lookup info"""
+        self.external_api = {
+            "civitai_attempted": attempted,
+            "result": result if result else {},
+            "reason": reason
+        }
+    
+    def to_json(self) -> str:
+        """Convert debug info to JSON string"""
+        return json.dumps({
+            "classification_steps": self.classification_steps,
+            "scores": self.scores,
+            "tensor_analysis": self.tensor_analysis,
+            "file_analysis": self.file_analysis,
+            "external_api": self.external_api,
+            "errors": self.errors,
+            "classification_time": self.classification_time,
+            "classifier_version": self.classifier_version
+        }, indent=2)
 
 @dataclass
 class ClassificationResult:
@@ -38,6 +116,9 @@ class ClassificationResult:
     
     # Raw metadata for storage
     raw_metadata: Optional[Dict[str, Any]] = None
+    
+    # Debug information for troubleshooting
+    debug_info: Optional[str] = None
 
 class SafeTensorsExtractor:
     """Extract metadata from SafeTensors files"""
@@ -298,6 +379,7 @@ class CivitAILookup:
             }
             
             primary_type = type_mapping.get(model_type, 'unknown')
+            
             base_model = self.extract_base_model(model_info, version_info)
             
             # Improve classification for specific base models
@@ -316,7 +398,8 @@ class CivitAILookup:
                 'triggers': triggers,
                 'confidence': 0.95,  # High confidence for CivitAI data
                 'civitai_id': model_info.get('id'),
-                'version_id': version_info.get('id')
+                'version_id': version_info.get('id'),
+                'raw_response': data  # Include complete raw response
             }
             
         except Exception as e:
@@ -324,22 +407,29 @@ class CivitAILookup:
     
     def extract_base_model(self, model_info: Dict, version_info: Dict) -> str:
         """Extract base model from CivitAI data"""
-        base_model = version_info.get('baseModel', '').lower()
+        base_model = version_info.get('baseModel', '')
+        base_model_lower = base_model.lower()
         
-        # Check base model field first
-        if 'flux' in base_model:
+        # Check base model field first - preserve detailed Flux variants
+        if 'flux.1 d' in base_model_lower or 'flux.1-d' in base_model_lower:
+            return 'flux_dev'
+        elif 'flux.1 s' in base_model_lower or 'flux.1-s' in base_model_lower:
+            return 'flux_schnell'
+        elif 'flux.1 kontext' in base_model_lower:
+            return 'flux_kontext'
+        elif 'flux' in base_model_lower:
             return 'flux'
-        elif 'sdxl' in base_model or 'xl' in base_model:
+        elif 'sdxl' in base_model_lower or 'xl' in base_model_lower:
             return 'sdxl'
-        elif 'sd 3' in base_model or 'sd3' in base_model:
+        elif 'sd 3' in base_model_lower or 'sd3' in base_model_lower:
             return 'sd3'
-        elif 'sd 1.5' in base_model or 'sd15' in base_model:
+        elif 'sd 1.5' in base_model_lower or 'sd15' in base_model_lower:
             return 'sd15'
-        elif 'sd 2' in base_model or 'sd2' in base_model:
+        elif 'sd 2' in base_model_lower or 'sd2' in base_model_lower:
             return 'sd2'
-        elif 'pony' in base_model:
+        elif 'pony' in base_model_lower:
             return 'pony'
-        elif 'wan' in base_model or 'video' in base_model:
+        elif 'wan' in base_model_lower or 'video' in base_model_lower:
             return 'wan'
         
         # Check model name for additional patterns
@@ -616,138 +706,230 @@ class ModelClassifier:
         self.model_types = [('checkpoint', 'Checkpoint'), ('lora', 'LoRA'), ('vae', 'VAE')]
 
     def classify_model(self, file_path: Path, file_hash: str = None, quiet: bool = False, model_id: int = None) -> ClassificationResult:
-        """Classify a model using multi-layer analysis"""
+        """Classify a model using multi-layer analysis with comprehensive debug logging"""
         
-        # Check for LFS pointer files
-        if SafeTensorsExtractor.is_lfs_pointer_file(file_path):
-            return ClassificationResult(
-                primary_type="lfs_pointer",
-                sub_type="undownloaded",
-                confidence=1.0,
-                method="lfs_detection"
-            )
+        # Initialize debug tracker
+        debugger = ClassificationDebugger()
+        debugger.add_step("classification_start", "started", file_path=str(file_path))
         
-        # Calculate hash if not provided
-        if file_hash is None:
-            file_hash = self.calculate_file_hash(file_path)
+        # Set file analysis info
+        file_size = file_path.stat().st_size if file_path.exists() else 0
+        debugger.set_file_analysis(file_size, file_path.suffix, file_path.name)
         
-        if not file_hash:
-            return ClassificationResult(
-                primary_type="unknown",
-                sub_type="unknown",
-                confidence=0.0,
-                method="failed"
-            )
-        
-        # Check if this is a reclassification without raw metadata
-        force_fresh_analysis = False
+        # Check if this is a reclassification and if we have existing metadata
+        has_existing_metadata = False
         if model_id and self.database:
             try:
                 existing_metadata = self.database.get_model_metadata_dict(model_id)
-                if not existing_metadata:
-                    force_fresh_analysis = True
+                if existing_metadata:
+                    has_existing_metadata = True
+                    debugger.add_step("existing_metadata_check", "found", metadata_count=len(existing_metadata))
                     if not quiet:
-                        print("    No raw metadata found - performing fresh analysis...")
-            except Exception:
-                force_fresh_analysis = True
+                        print("    Found existing metadata - using efficient reclassification...")
+                else:
+                    debugger.add_step("existing_metadata_check", "missing", reason="no_metadata_found")
+                    if not quiet:
+                        print("    No existing metadata - treating as new model...")
+            except Exception as e:
+                debugger.add_step("existing_metadata_check", "error", error=str(e))
+                debugger.add_error(f"Metadata check failed: {e}")
+        else:
+            debugger.add_step("existing_metadata_check", "skipped", reason="new_model_or_no_db")
         
-        # STEP 1: Check for GGUF files first
+        # If we have existing metadata, use efficient reclassification
+        if has_existing_metadata:
+            debugger.add_step("efficient_reclassification", "started")
+            # For existing metadata, we just re-run scoring with cached data
+            # This is more efficient than re-extracting everything
+            if file_path.suffix.lower() == '.safetensors':
+                result = self.classify_safetensors(file_path, file_hash, quiet)
+                debugger.add_step("efficient_reclassification", "completed", method="safetensors_cached")
+            else:
+                result = self.classify_by_size(file_path, file_hash, quiet)
+                debugger.add_step("efficient_reclassification", "completed", method="size_cached")
+            
+            # Add debug info to result
+            result.debug_info = debugger.to_json()
+            return result
+        
+        # Full classification process for new models or missing metadata
+        debugger.add_step("full_classification", "started")
+        
+        # Calculate hash if not provided
+        if file_hash is None:
+            debugger.add_step("hash_calculation", "started")
+            file_hash = self.calculate_file_hash(file_path)
+            if file_hash:
+                debugger.add_step("hash_calculation", "completed", hash_length=len(file_hash))
+            else:
+                debugger.add_step("hash_calculation", "failed")
+                debugger.add_error("Failed to calculate file hash")
+                result = ClassificationResult(
+                    primary_type="unknown",
+                    sub_type="unknown",
+                    confidence=0.0,
+                    method="failed",
+                    debug_info=debugger.to_json()
+                )
+                return result
+        
+        # STEP 1: LFS Pointer Detection
+        debugger.add_step("lfs_check", "started")
+        if SafeTensorsExtractor.is_lfs_pointer_file(file_path):
+            debugger.add_step("lfs_check", "detected", result="lfs_pointer")
+            result = ClassificationResult(
+                primary_type="lfs_pointer",
+                sub_type="undownloaded",
+                confidence=1.0,
+                method="lfs_detection",
+                debug_info=debugger.to_json()
+            )
+            return result
+        else:
+            debugger.add_step("lfs_check", "passed", result="not_lfs_pointer")
+        
+        # STEP 2: GGUF Special Handling
+        debugger.add_step("gguf_check", "started")
         if file_path.suffix.lower() == '.gguf':
-            return self.classify_gguf(file_path, file_hash, quiet)
+            debugger.add_step("gguf_check", "detected", result="gguf_file")
+            result = self.classify_gguf(file_path, file_hash, quiet)
+            # Add debug info to result
+            result.debug_info = debugger.to_json()
+            return result
+        else:
+            debugger.add_step("gguf_check", "passed", result="not_gguf")
         
-        # STEP 2: Check manual overrides
+        # STEP 3: Manual Overrides (stubbed for now)
+        debugger.add_step("manual_override", "started")
+        # TODO: Implement full manual override system
+        # For now, just check basic config overrides
         manual_overrides = self.class_config.get('manual_overrides', {})
         filename_key = file_path.name.lower()
         if filename_key in manual_overrides:
             override = manual_overrides[filename_key]
-            return ClassificationResult(
+            debugger.add_step("manual_override", "applied", override_type=override.get('primary_type', 'unknown'))
+            result = ClassificationResult(
                 primary_type=override.get('primary_type', 'unknown'),
                 sub_type=override.get('sub_type', 'unknown'),
                 confidence=1.0,
                 method="manual_override",
-                triggers=override.get('triggers', [])
+                triggers=override.get('triggers', []),
+                debug_info=debugger.to_json()
             )
+            return result
+        else:
+            debugger.add_step("manual_override", "skipped", reason="no_override_found")
         
-        # STEP 3: Data-driven classification (if available and not forcing fresh analysis)
-        if self.data_driven_engine and not force_fresh_analysis:
+        # STEP 4: Data-driven Classification Engine (temporarily disabled for debugging)
+        debugger.add_step("data_driven_classification", "started")
+        if self.data_driven_engine:
+            debugger.add_step("data_driven_classification", "skipped", reason="temporarily_disabled_for_debugging")
             if not quiet:
-                print("    Using data-driven classification engine...")
+                print("    Data-driven classification engine temporarily disabled for debugging...")
+        else:
+            debugger.add_step("data_driven_classification", "skipped", reason="no_engine")
+        
+        # STEP 5: CivitAI API Lookup (always execute for comprehensive classification)
+        debugger.add_step("civitai_api_lookup", "started")
+        if not quiet:
+            print("    Querying CivitAI API...")
+        
+        civitai_result = self.civitai.lookup_by_hash(file_hash)
+        if civitai_result.get('found'):
+            primary_type = civitai_result['primary_type']
+            base_model = civitai_result['base_model']
+            sub_type = self.determine_sub_type(primary_type, base_model, file_path.name)
             
-            # Query CivitAI for external data
-            civitai_result = self.civitai.lookup_by_hash(file_hash)
-            civitai_data = civitai_result if civitai_result.get('found') else None
+            debugger.add_step("civitai_api_lookup", "found", 
+                            model_name=civitai_result.get('name', 'Unknown'),
+                            primary_type=primary_type,
+                            base_model=base_model)
             
-            # Extract metadata if available
-            metadata = None
-            if file_path.suffix.lower() == '.safetensors':
-                metadata = SafeTensorsExtractor.extract_metadata(file_path)
+            if not quiet:
+                print(f"    CivitAI: {civitai_result.get('name', 'Unknown')} ({primary_type})")
             
-            # Run data-driven classification
-            dd_result = self.data_driven_engine.classify_model_data_driven(
-                file_path, civitai_data, metadata
+            # Store raw CivitAI data for later metadata storage
+            classification_result = ClassificationResult(
+                primary_type=primary_type,
+                sub_type=sub_type,
+                confidence=civitai_result['confidence'],
+                method="civitai_api",
+                base_model=base_model,
+                triggers=civitai_result.get('triggers', []),
+                debug_info=debugger.to_json()
             )
-            
-            if dd_result['confidence'] > self.confidence_threshold:
-                return ClassificationResult(
-                    primary_type=dd_result['primary_type'],
-                    sub_type=dd_result['sub_type'],
-                    confidence=dd_result['confidence'],
-                    method=dd_result['method'],
-                    triggers=civitai_data.get('triggers', []) if civitai_data else [],
-                    base_model=dd_result['base_model']
-                )
+            # Store both our processed result AND the complete raw CivitAI response
+            classification_result.raw_metadata = {
+                'civitai_response': civitai_result,
+                'civitai_raw_data': civitai_result.get('raw_response', {})  # Complete raw response from CivitAI API
+            }
+            return classification_result
+        else:
+            debugger.add_step("civitai_api_lookup", "not_found")
         
-        # STEP 4: Fallback to original CivitAI API lookup (for compatibility, but not when forcing fresh analysis)
-        if not force_fresh_analysis:
-            if not quiet:
-                print("    Querying CivitAI API...")
-            
-            civitai_result = self.civitai.lookup_by_hash(file_hash)
-            if civitai_result.get('found'):
-                primary_type = civitai_result['primary_type']
-                base_model = civitai_result['base_model']
-                sub_type = self.determine_sub_type(primary_type, base_model, file_path.name)
-                
-                if not quiet:
-                    print(f"    CivitAI: {civitai_result.get('name', 'Unknown')} ({primary_type})")
-                
-                # Store raw CivitAI data for later metadata storage
-                classification_result = ClassificationResult(
-                    primary_type=primary_type,
-                    sub_type=sub_type,
-                    confidence=civitai_result['confidence'],
-                    method="civitai_api",
-                    base_model=base_model,
-                    triggers=civitai_result.get('triggers', [])
-                )
-                classification_result.raw_metadata = {'civitai_response': civitai_result}
-                return classification_result
-        
-        # STEP 4: SafeTensors metadata analysis
+        # STEP 6: SafeTensors Analysis
+        debugger.add_step("safetensors_analysis", "started")
         if file_path.suffix.lower() == '.safetensors':
-            return self.classify_safetensors(file_path, file_hash, quiet)
+            debugger.add_step("safetensors_analysis", "processing")
+            result = self.classify_safetensors(file_path, file_hash, quiet)
+            # Merge debug info
+            if result.debug_info:
+                existing_debug = json.loads(result.debug_info)
+                debugger.classification_steps.extend(existing_debug.get('classification_steps', []))
+                debugger.scores.update(existing_debug.get('scores', {}))
+                debugger.tensor_analysis.update(existing_debug.get('tensor_analysis', {}))
+            
+            debugger.add_step("safetensors_analysis", "completed", 
+                            primary_type=result.primary_type,
+                            method=result.method)
+            result.debug_info = debugger.to_json()
+            return result
+        else:
+            debugger.add_step("safetensors_analysis", "skipped", reason="not_safetensors")
         
-        # STEP 5: File size analysis fallback
-        return self.classify_by_size(file_path, file_hash, quiet)
+        # STEP 7: Size-based Fallback
+        debugger.add_step("size_fallback", "started")
+        result = self.classify_by_size(file_path, file_hash, quiet)
+        debugger.add_step("size_fallback", "completed", 
+                        primary_type=result.primary_type,
+                        method=result.method)
+        
+        # Add debug info to result
+        result.debug_info = debugger.to_json()
+        return result
     
     def classify_safetensors(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
         """Classify SafeTensors files using metadata and tensor analysis"""
+        debugger = ClassificationDebugger()
+        
+        # Set file analysis info
+        file_size = file_path.stat().st_size
+        debugger.set_file_analysis(file_size, file_path.suffix, file_path.name)
+        debugger.add_step("safetensors_classification", "started")
+        
         if not quiet:
             print("    Analyzing SafeTensors metadata...")
         
+        debugger.add_step("safetensors_extraction", "started")
         metadata = SafeTensorsExtractor.extract_metadata(file_path)
         if 'error' in metadata:
+            debugger.add_step("safetensors_extraction", "failed", error=metadata['error'])
+            debugger.add_error(f"SafeTensors extraction failed: {metadata['error']}")
             if not quiet:
                 print(f"    SafeTensors error: {metadata['error']}")
-            return self.classify_by_size(file_path, file_hash, quiet)
+            return self.classify_by_size(file_path, file_hash, quiet, debugger)
+        
+        debugger.add_step("safetensors_extraction", "success", tensor_count=metadata.get('tensor_count', 0))
         
         tensor_names = metadata.get('tensor_names', [])
         tensor_count = metadata.get('tensor_count', 0)
         st_metadata = metadata.get('metadata', {})
         
         # Analyze tensor patterns
+        debugger.add_step("tensor_analysis", "started")
         tensor_scores = self.tensor_analyzer.analyze_tensors(tensor_names)
         architecture = self.tensor_analyzer.get_architecture_hints(tensor_names, st_metadata)
+        debugger.add_step("tensor_analysis", "completed")
         
         # Calculate individual scores
         filename_score = self.calculate_filename_score(file_path.name)
@@ -755,33 +937,45 @@ class ModelClassifier:
         tensor_score = max(tensor_scores.values()) if tensor_scores else 0.0
         metadata_score = self.calculate_metadata_score(st_metadata)
         
+        # Set scores and tensor analysis in debugger
+        debugger.set_scores(filename_score, size_score, tensor_score, metadata_score)
+        debugger.set_tensor_analysis(tensor_count, tensor_scores, tensor_names)
+        
         # Determine primary type based on highest tensor score
         has_meaningful_tensor_scores = tensor_scores and max(tensor_scores.values()) > 0.0
         if has_meaningful_tensor_scores:
+            debugger.add_step("classification_decision", "tensor_based")
             primary_type = max(tensor_scores.items(), key=lambda x: x[1])[0]
             confidence = tensor_scores[primary_type]
         else:
             # Tensor analysis failed or all scores are 0 - use filename-based detection first
+            debugger.add_step("classification_decision", "filename_based", reason="tensor_analysis_failed_or_zero")
             filename_lower = file_path.name.lower()
             
             # Always prioritize strong filename indicators for common model types
             if 'lora' in filename_lower:
+                debugger.add_step("filename_detection", "success", detected="lora", confidence=filename_score)
                 primary_type = 'lora'
                 confidence = max(filename_score, 0.8)  # Ensure minimum confidence
             elif 'controlnet' in filename_lower or 'control_' in filename_lower:
+                debugger.add_step("filename_detection", "success", detected="controlnet", confidence=filename_score)
                 primary_type = 'controlnet'
                 confidence = max(filename_score, 0.8)
             elif 'vae' in filename_lower:
+                debugger.add_step("filename_detection", "success", detected="vae", confidence=filename_score)
                 primary_type = 'vae'
                 confidence = max(filename_score, 0.8)
             elif 'embedding' in filename_lower or 'textual_inversion' in filename_lower:
+                debugger.add_step("filename_detection", "success", detected="embedding", confidence=filename_score)
                 primary_type = 'embedding'
                 confidence = max(filename_score, 0.8)
             elif filename_score >= 0.8:  # Other high confidence filename matches
+                debugger.add_step("filename_detection", "partial", reason="high_score_but_no_specific_match")
                 # This catches cases like 'checkpoint', 'ip-adapter', etc.
                 primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size)
                 confidence = max(confidence, filename_score)
             else:
+                debugger.add_step("filename_detection", "failed", reason="low_confidence_score")
                 # Fallback to size-based classification
                 primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size)
         
@@ -823,6 +1017,13 @@ class ModelClassifier:
             'file_size': file_path.stat().st_size
         }
         
+        # Finalize debug info
+        debugger.add_step("final_decision", "completed", 
+                         primary_type=primary_type, 
+                         sub_type=sub_type, 
+                         final_confidence=final_confidence,
+                         method="safetensors_analysis")
+        
         classification_result = ClassificationResult(
             primary_type=primary_type,
             sub_type=sub_type,
@@ -834,7 +1035,8 @@ class ModelClassifier:
             filename_score=filename_score,
             size_score=size_score,
             metadata_score=metadata_score,
-            tensor_score=tensor_score
+            tensor_score=tensor_score,
+            debug_info=debugger.to_json()
         )
         classification_result.raw_metadata = raw_metadata
         return classification_result
@@ -875,16 +1077,33 @@ class ModelClassifier:
         classification_result.raw_metadata = raw_metadata
         return classification_result
     
-    def classify_by_size(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
+    def classify_by_size(self, file_path: Path, file_hash: str, quiet: bool = False, debugger: ClassificationDebugger = None) -> ClassificationResult:
         """Classify model by file size as fallback"""
+        if debugger is None:
+            debugger = ClassificationDebugger()
+            debugger.set_file_analysis(file_path.stat().st_size, file_path.suffix, file_path.name)
+        
+        debugger.add_step("size_classification", "started")
+        
         file_size = file_path.stat().st_size
         primary_type, confidence = self.classify_by_size_only(file_size)
+        
+        debugger.add_step("size_analysis", "completed", 
+                         detected=primary_type, 
+                         confidence=confidence,
+                         file_size_mb=round(file_size / (1024 * 1024), 1))
         
         # Calculate filename score for additional confidence
         filename_score = self.calculate_filename_score(file_path.name)
         
         # Combine size and filename scores
         combined_confidence = (confidence * 0.7) + (filename_score * 0.3)
+        
+        debugger.set_scores(filename_score=filename_score, size_score=confidence)
+        debugger.add_step("final_decision", "completed", 
+                         primary_type=primary_type, 
+                         confidence=combined_confidence,
+                         method="size_analysis")
         
         sub_type = self.determine_sub_type(primary_type, 'unknown', file_path.name)
         
@@ -904,7 +1123,8 @@ class ModelClassifier:
             confidence=combined_confidence,
             method="size_analysis",
             size_score=confidence,
-            filename_score=filename_score
+            filename_score=filename_score,
+            debug_info=debugger.to_json()
         )
         classification_result.raw_metadata = raw_metadata
         return classification_result
@@ -1058,8 +1278,8 @@ class ModelClassifier:
         filename_lower = filename.lower()
         
         if primary_type == 'lora':
-            if base_model == 'flux':
-                return 'flux'
+            if base_model in ['flux_dev', 'flux_schnell', 'flux_kontext', 'flux']:
+                return base_model  # Return the specific flux variant
             elif base_model == 'sdxl':
                 return 'sdxl'
             elif base_model == 'sd15':
@@ -1086,8 +1306,8 @@ class ModelClassifier:
                 return 'unknown'
         
         elif primary_type == 'checkpoint':
-            if base_model == 'flux':
-                return 'flux'
+            if base_model in ['flux_dev', 'flux_schnell', 'flux_kontext', 'flux']:
+                return base_model  # Return the specific flux variant
             elif base_model == 'sdxl':
                 return 'sdxl'
             elif base_model == 'sd15':

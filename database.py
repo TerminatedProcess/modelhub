@@ -40,6 +40,7 @@ class Model:
     updated_at: str
     reclassify: str
     deleted: bool
+    debug_info: Optional[str]
 
 @dataclass
 class DeployTarget:
@@ -144,6 +145,9 @@ class ModelHubDB:
                     
                     -- Soft delete flag
                     deleted BOOLEAN DEFAULT FALSE,
+                    
+                    -- Debug information for classification troubleshooting
+                    debug_info TEXT,
                     
                     filename TEXT NOT NULL,
                     file_size INTEGER NOT NULL,
@@ -854,7 +858,7 @@ class ModelHubDB:
                primary_type, sub_type, confidence, classification_method,
                tensor_count, architecture, precision, quantization,
                triggers, filename_score, size_score, metadata_score,
-               tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+               tensor_score, classified_at, created_at, updated_at, reclassify, deleted, debug_info
         FROM models
         """
         
@@ -920,7 +924,7 @@ class ModelHubDB:
                    primary_type, sub_type, confidence, classification_method,
                    tensor_count, architecture, precision, quantization,
                    triggers, filename_score, size_score, metadata_score,
-                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted, debug_info
             FROM models WHERE id = ? AND deleted = 0
         """, (model_id,))
         
@@ -1415,8 +1419,8 @@ class ModelHubDB:
                 file_hash, filename, file_size, file_extension,
                 primary_type, sub_type, confidence, classification_method,
                 tensor_count, architecture, precision, quantization, triggers, 
-                filename_score, size_score, metadata_score, tensor_score, classified_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                filename_score, size_score, metadata_score, tensor_score, classified_at, debug_info
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             file_hash, filename, file_size, file_extension,
             classification.primary_type, classification.sub_type, 
@@ -1426,7 +1430,7 @@ class ModelHubDB:
             triggers_str, 
             getattr(classification, 'filename_score', 0.0), getattr(classification, 'size_score', 0.0),
             getattr(classification, 'metadata_score', 0.0), getattr(classification, 'tensor_score', 0.0),
-            classified_at
+            classified_at, getattr(classification, 'debug_info', None)
         ))
         
         model_id = cursor.lastrowid
@@ -1472,7 +1476,7 @@ class ModelHubDB:
                    primary_type, sub_type, confidence, classification_method,
                    tensor_count, architecture, precision, quantization,
                    triggers, filename_score, size_score, metadata_score,
-                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted
+                   tensor_score, classified_at, created_at, updated_at, reclassify, deleted, debug_info
             FROM models WHERE file_hash = ?
         """, (file_hash,))
         
