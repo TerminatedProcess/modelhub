@@ -77,37 +77,45 @@ def classify_model(self, file_path: Path, file_hash: str = None, quiet: bool = F
 
 The classification system follows a strict 7-step process with comprehensive debug logging:
 
-1. **LFS Pointer Detection** (`classifier.py:735-750`)
+1. **LFS Pointer Detection** (`classifier.py:744-757`)
    - Checks if file is an undownloaded Git LFS pointer
-   - Returns immediately if LFS pointer detected
+   - **Important**: LFS pointer files are **excluded from import** entirely (database.py:1236-1241)
+   - Returns immediately if LFS pointer detected (during classification)
+   - This prevents importing placeholder files that users didn't download
 
-2. **GGUF Special Handling** (`classifier.py:752-765`)
-   - Special processing for GGUF quantized models
+2. **GGUF Special Handling** (`classifier.py:759-768`)
+   - **Extension-based detection**: If file has `.gguf` extension, it's classified as GGUF
+   - **File size irrelevant**: Classification based purely on extension
+   - **Always returns**: `gguf` primary type, `quantized_model` sub-type
+   - High confidence (0.9) regardless of file size
    - Returns immediately if GGUF file detected
 
-3. **Manual Overrides** (`classifier.py:767-790`)
+3. **Manual Overrides** (`classifier.py:770-789`)
    - **Status**: Stubbed (basic config check only)
    - Checks config for explicit model classifications
    - Full manual override system planned for future development
 
-4. **Data-Driven Classification Engine** (`classifier.py:792-835`)
-   - **Status**: Active (database-driven rules system)
+4. **Data-Driven Classification Engine** (`classifier.py:791-799`)
+   - **Status**: Temporarily disabled for debugging
    - Uses classification rules stored in `classification.db`
-   - Includes CivitAI lookup for external data
-   - Returns result if confidence exceeds threshold
+   - Database-driven rules system for future use
 
-5. **CivitAI API Lookup** (`classifier.py:837-865`)
+5. **CivitAI API Lookup** (`classifier.py:800-836`)
    - **Status**: Always executes (no conditional skipping)
    - Queries external API for model metadata
    - Returns result if model found in CivitAI database
+   - Can override other classification methods with high confidence
 
-6. **SafeTensors Analysis** (`classifier.py:867-885`)
+6. **SafeTensors Analysis** (`classifier.py:838-856`)
    - Extracts and analyzes tensor metadata for .safetensors files
-   - Uses tensor patterns and metadata extraction
+   - Uses tensor patterns, filename analysis, and size-based fallback
+   - **GGUF exclusion**: Size-based fallback excludes GGUF type for non-.gguf files
+   - Multi-weighted scoring system with tensor analysis priority
 
-7. **Size-based Fallback** (`classifier.py:887-895`)
+7. **Size-based Fallback** (`classifier.py:858-867`)
    - Final fallback using file size analysis
-   - Ensures every model gets classified
+   - **GGUF protection**: Cannot classify non-.gguf files as GGUF type
+   - Ensures every model gets classified with appropriate confidence
 
 #### **3. Intelligent Reclassification System**:
 
@@ -121,10 +129,33 @@ This approach ensures efficiency while handling edge cases like parse errors or 
 
 ### **Key Components**:
 
-#### **A. ModelClassifier Class** - `classifier.py:355-868`
+#### **A. ModelClassifier Class** - `classifier.py:640-1200`
 Main classification engine with initialization and core methods
 
-#### **B. Tensor Analysis** - `classifier.py:138-223`
+#### **B. SafeTensors Classification** - `classifier.py:869-1010`
+**Method**: `classify_safetensors()`
+Comprehensive analysis for .safetensors files:
+- Tensor pattern analysis with weighted scoring
+- Filename-based detection with high confidence thresholds
+- Size-based fallback with GGUF exclusion protection
+- Multi-layer approach: tensor → filename → size
+
+#### **C. GGUF Classification** - `classifier.py:1012-1046`
+**Method**: `classify_gguf()`
+Dedicated GGUF file processing:
+- Extension-based detection (.gguf files only)
+- Always returns `gguf` primary type, `quantized_model` sub-type
+- High confidence (0.9) regardless of file size
+- GGUF metadata extraction for additional details
+
+#### **D. Size-based Classification** - `classifier.py:1048-1098`, `1100-1126`
+**Methods**: `classify_by_size()`, `classify_by_size_only()`
+Fallback classification using file size ranges:
+- **GGUF Protection**: Excludes GGUF type for non-.gguf files
+- Configurable size rules per model type
+- Confidence scoring based on size fit within ranges
+
+#### **E. Tensor Analysis** - `classifier.py:138-223`
 **Method**: `analyze_tensors()`
 Analyzes tensor patterns to identify model architectures:
 - LoRA patterns: `lora_up`, `lora_down`
@@ -132,12 +163,12 @@ Analyzes tensor patterns to identify model architectures:
 - ControlNet patterns: `control_model`
 - VAE patterns: `encoder.down`, `decoder.up`
 
-#### **C. SafeTensors Extraction** - `classifier.py:42-110`
-**Method**: `extract_safetensors_metadata()`
-Extracts metadata from SafeTensors files
+#### **F. SafeTensors Extraction** - `classifier.py:123-137`
+**Method**: `extract_metadata()`
+Extracts metadata from SafeTensors files with LFS pointer detection
 
-#### **D. CivitAI Integration** - `classifier.py:224-353`
-**Method**: `lookup_civitai_model()`
+#### **G. CivitAI Integration** - `classifier.py:224-353`
+**Method**: `lookup_by_hash()`
 External API lookup with rate limiting and error handling
 
 ### **How Classification is Triggered**:
@@ -307,7 +338,33 @@ Every classification generates comprehensive debug information stored in the `de
 
 This provides complete visibility into the classification process for debugging and analysis.
 
-### 8. **Key Features**
+### 8. **Recent Improvements and Fixes**
+
+#### **A. LFS Pointer File Handling**
+**Problem**: Git LFS pointer files (placeholder files for undownloaded models) were being imported into the database as unusable entries.
+
+**Solution**: 
+- **Import-level exclusion** (database.py:1236-1241): LFS pointer files are detected and skipped during import
+- **User intent respect**: If users didn't download a model, the hub doesn't import the placeholder
+- **Resource optimization**: Prevents database clutter with non-functional model entries
+
+#### **B. GGUF Classification Fix**
+**Problem**: Non-GGUF files (especially .safetensors files) were being misclassified as GGUF type due to size-based fallback logic.
+
+**Root Cause**: Large files (6GB+) fell within GGUF size range (100MB-200GB) and were classified as GGUF when tensor analysis failed.
+
+**Solution**: 
+- **Extension-based protection** (classifier.py:1106-1108): `classify_by_size_only()` excludes GGUF classification for non-.gguf files
+- **GGUF-only rule**: Only files with .gguf extension can be classified as GGUF type
+- **Preservation of GGUF logic**: .gguf files are still immediately classified as GGUF based on extension alone
+
+#### **C. Classification Accuracy Improvements**
+- **Weighted scoring prioritization**: Tensor analysis (50%) over size-based fallback (20%)
+- **Filename confidence thresholds**: Strong indicators like 'lora', 'vae', 'controlnet' get high confidence (0.8-0.9)
+- **Fallback chain optimization**: tensor → filename → size with appropriate confidence adjustments
+- **Debug information enhancement**: Complete audit trail for every classification decision
+
+### 9. **Key Features**
 
 1. **Multi-format Support**: SafeTensors, GGUF, legacy formats
 2. **External API Integration**: CivitAI lookup with caching (always executes)
