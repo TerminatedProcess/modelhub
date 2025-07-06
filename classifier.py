@@ -797,12 +797,14 @@ class ModelClassifier:
         else:
             debugger.add_step("data_driven_classification", "skipped", reason="no_engine")
         
-        # STEP 5: CivitAI API Lookup (always execute for comprehensive classification)
+        # STEP 5: CivitAI API Lookup (store result for later comparison)
         debugger.add_step("civitai_api_lookup", "started")
         if not quiet:
             print("    Querying CivitAI API...")
         
         civitai_result = self.civitai.lookup_by_hash(file_hash)
+        civitai_classification = None
+        
         if civitai_result.get('found'):
             primary_type = civitai_result['primary_type']
             base_model = civitai_result['base_model']
@@ -816,55 +818,85 @@ class ModelClassifier:
             if not quiet:
                 print(f"    CivitAI: {civitai_result.get('name', 'Unknown')} ({primary_type})")
             
-            # Store raw CivitAI data for later metadata storage
-            classification_result = ClassificationResult(
+            # Store CivitAI result for later comparison
+            civitai_classification = ClassificationResult(
                 primary_type=primary_type,
                 sub_type=sub_type,
                 confidence=civitai_result['confidence'],
                 method="civitai_api",
                 base_model=base_model,
-                triggers=civitai_result.get('triggers', []),
-                debug_info=debugger.to_json()
+                triggers=civitai_result.get('triggers', [])
             )
-            # Store both our processed result AND the complete raw CivitAI response
-            classification_result.raw_metadata = {
+            civitai_classification.raw_metadata = {
                 'civitai_response': civitai_result,
-                'civitai_raw_data': civitai_result.get('raw_response', {})  # Complete raw response from CivitAI API
+                'civitai_raw_data': civitai_result.get('raw_response', {})
             }
-            return classification_result
         else:
             debugger.add_step("civitai_api_lookup", "not_found")
         
         # STEP 6: SafeTensors Analysis
         debugger.add_step("safetensors_analysis", "started")
+        local_result = None
+        
         if file_path.suffix.lower() == '.safetensors':
             debugger.add_step("safetensors_analysis", "processing")
-            result = self.classify_safetensors(file_path, file_hash, quiet)
+            local_result = self.classify_safetensors(file_path, file_hash, quiet)
             # Merge debug info
-            if result.debug_info:
-                existing_debug = json.loads(result.debug_info)
+            if local_result.debug_info:
+                existing_debug = json.loads(local_result.debug_info)
                 debugger.classification_steps.extend(existing_debug.get('classification_steps', []))
                 debugger.scores.update(existing_debug.get('scores', {}))
                 debugger.tensor_analysis.update(existing_debug.get('tensor_analysis', {}))
             
             debugger.add_step("safetensors_analysis", "completed", 
-                            primary_type=result.primary_type,
-                            method=result.method)
-            result.debug_info = debugger.to_json()
-            return result
+                            primary_type=local_result.primary_type,
+                            method=local_result.method)
         else:
             debugger.add_step("safetensors_analysis", "skipped", reason="not_safetensors")
+            # STEP 7: Size-based Fallback
+            debugger.add_step("size_fallback", "started")
+            local_result = self.classify_by_size(file_path, file_hash, quiet)
+            debugger.add_step("size_fallback", "completed", 
+                            primary_type=local_result.primary_type,
+                            method=local_result.method)
         
-        # STEP 7: Size-based Fallback
-        debugger.add_step("size_fallback", "started")
-        result = self.classify_by_size(file_path, file_hash, quiet)
-        debugger.add_step("size_fallback", "completed", 
-                        primary_type=result.primary_type,
-                        method=result.method)
+        # STEP 8: Compare CivitAI vs Local Classification
+        final_result = self.choose_best_classification(civitai_classification, local_result, debugger)
+        final_result.debug_info = debugger.to_json()
+        return final_result
+    
+    def choose_best_classification(self, civitai_result: ClassificationResult, local_result: ClassificationResult, debugger: ClassificationDebugger) -> ClassificationResult:
+        """Choose the best classification between CivitAI and local analysis"""
+        if not civitai_result:
+            debugger.add_step("classification_choice", "local_only", reason="no_civitai_result")
+            return local_result
         
-        # Add debug info to result
-        result.debug_info = debugger.to_json()
-        return result
+        if not local_result:
+            debugger.add_step("classification_choice", "civitai_only", reason="no_local_result") 
+            return civitai_result
+        
+        # Special rules for component classifications
+        component_types = {'text_encoder', 'clip', 'vae'}
+        if local_result.primary_type in component_types and civitai_result.primary_type not in component_types:
+            debugger.add_step("classification_choice", "local_preferred", 
+                            reason="component_vs_model", 
+                            local_type=local_result.primary_type,
+                            civitai_type=civitai_result.primary_type)
+            return local_result
+        
+        # Confidence-based decision
+        if local_result.confidence > civitai_result.confidence:
+            debugger.add_step("classification_choice", "local_preferred",
+                            reason="higher_confidence",
+                            local_confidence=local_result.confidence,
+                            civitai_confidence=civitai_result.confidence)
+            return local_result
+        else:
+            debugger.add_step("classification_choice", "civitai_preferred",
+                            reason="higher_confidence",
+                            local_confidence=local_result.confidence, 
+                            civitai_confidence=civitai_result.confidence)
+            return civitai_result
     
     def classify_safetensors(self, file_path: Path, file_hash: str, quiet: bool = False) -> ClassificationResult:
         """Classify SafeTensors files using metadata and tensor analysis"""
@@ -920,18 +952,26 @@ class ModelClassifier:
             debugger.add_step("classification_decision", "filename_based", reason="tensor_analysis_failed_or_zero")
             filename_lower = file_path.name.lower()
             
-            # Always prioritize strong filename indicators for common model types
-            if 'lora' in filename_lower:
+            # Always prioritize strong filename indicators, starting with components
+            if any(pattern in filename_lower for pattern in ['t5xxl', 't5_xxl', 'umt5', 'text_encoder']):
+                debugger.add_step("filename_detection", "success", detected="text_encoder", confidence=filename_score)
+                primary_type = 'text_encoder'
+                confidence = max(filename_score, 0.9)
+            elif any(pattern in filename_lower for pattern in ['clip_l', 'clip_g', 'clip_vision', 'clip.']):
+                debugger.add_step("filename_detection", "success", detected="clip", confidence=filename_score)
+                primary_type = 'clip'
+                confidence = max(filename_score, 0.9)
+            elif 'vae' in filename_lower and 'encoder' not in filename_lower:
+                debugger.add_step("filename_detection", "success", detected="vae", confidence=filename_score)
+                primary_type = 'vae'
+                confidence = max(filename_score, 0.9)
+            elif 'lora' in filename_lower:
                 debugger.add_step("filename_detection", "success", detected="lora", confidence=filename_score)
                 primary_type = 'lora'
-                confidence = max(filename_score, 0.8)  # Ensure minimum confidence
+                confidence = max(filename_score, 0.8)
             elif 'controlnet' in filename_lower or 'control_' in filename_lower:
                 debugger.add_step("filename_detection", "success", detected="controlnet", confidence=filename_score)
                 primary_type = 'controlnet'
-                confidence = max(filename_score, 0.8)
-            elif 'vae' in filename_lower:
-                debugger.add_step("filename_detection", "success", detected="vae", confidence=filename_score)
-                primary_type = 'vae'
                 confidence = max(filename_score, 0.8)
             elif 'embedding' in filename_lower or 'textual_inversion' in filename_lower:
                 debugger.add_step("filename_detection", "success", detected="embedding", confidence=filename_score)
@@ -1129,12 +1169,18 @@ class ModelClassifier:
         """Calculate confidence score based on filename patterns"""
         filename_lower = filename.lower()
         
-        # Strong indicators
-        if 'lora' in filename_lower:
+        # Component-specific indicators (highest priority)
+        if any(pattern in filename_lower for pattern in ['t5xxl', 't5_xxl', 'umt5', 'text_encoder']):
+            return 0.95
+        elif any(pattern in filename_lower for pattern in ['clip_l', 'clip_g', 'clip_vision', 'clip.']):
+            return 0.95
+        elif 'vae' in filename_lower and 'encoder' not in filename_lower:  # VAE but not text_encoder
+            return 0.95
+        
+        # Model type indicators
+        elif 'lora' in filename_lower:
             return 0.9
         elif 'controlnet' in filename_lower or 'control_' in filename_lower:
-            return 0.9
-        elif 'vae' in filename_lower:
             return 0.9
         elif 'ip-adapter' in filename_lower or 'ip_adapter' in filename_lower:
             return 0.9

@@ -1228,6 +1228,38 @@ class ModelHubDB:
             print(f"Error calculating hash for {file_path}: {e}")
             return ""
     
+    def _is_python_package_file(self, file_path: Path) -> bool:
+        """Check if file is a Python package file that should be excluded"""
+        filename_lower = file_path.name.lower()
+        
+        # Python package indicators
+        python_package_patterns = [
+            'distutils',
+            'setuptools', 
+            'pip',
+            'wheel',
+            'pkg_resources',
+            'google_generativeai',
+            'coloredlogs',
+            '__pycache__',
+            '.pyc',
+            '.pyo'
+        ]
+        
+        # Check for .pth files with package names or small size
+        if file_path.suffix.lower() == '.pth':
+            # Check if filename contains package indicators
+            if any(pattern in filename_lower for pattern in python_package_patterns):
+                return True
+            # Very small .pth files are likely package files
+            try:
+                if file_path.stat().st_size < 1000:  # Less than 1KB
+                    return True
+            except:
+                pass
+        
+        return False
+    
     def import_model(self, file_path: Path, model_hub_path: Path, quiet: bool = False, config_manager=None, preserve_originals: bool = False) -> Optional[Model]:
         """Import a model file into the hub"""
         if not file_path.exists():
@@ -1238,6 +1270,12 @@ class ModelHubDB:
         if SafeTensorsExtractor.is_lfs_pointer_file(file_path):
             if not quiet:
                 print(f"Skipping LFS pointer file (not downloaded): {file_path.name}")
+            return None
+        
+        # Skip Python package files - they're not models
+        if self._is_python_package_file(file_path):
+            if not quiet:
+                print(f"Skipping Python package file: {file_path.name}")
             return None
         
         # Calculate file hash
