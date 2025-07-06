@@ -1233,6 +1233,13 @@ class ModelHubDB:
         if not file_path.exists():
             raise FileNotFoundError(f"Model file not found: {file_path}")
         
+        # Skip LFS pointer files entirely - they're not actual models
+        from classifier import SafeTensorsExtractor
+        if SafeTensorsExtractor.is_lfs_pointer_file(file_path):
+            if not quiet:
+                print(f"Skipping LFS pointer file (not downloaded): {file_path.name}")
+            return None
+        
         # Calculate file hash
         file_hash = self.calculate_file_hash(file_path)
         

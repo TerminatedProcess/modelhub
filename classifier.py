@@ -940,12 +940,12 @@ class ModelClassifier:
             elif filename_score >= 0.8:  # Other high confidence filename matches
                 debugger.add_step("filename_detection", "partial", reason="high_score_but_no_specific_match")
                 # This catches cases like 'checkpoint', 'ip-adapter', etc.
-                primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size)
+                primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size, file_path.suffix)
                 confidence = max(confidence, filename_score)
             else:
                 debugger.add_step("filename_detection", "failed", reason="low_confidence_score")
                 # Fallback to size-based classification
-                primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size)
+                primary_type, confidence = self.classify_by_size_only(file_path.stat().st_size, file_path.suffix)
         
         # Calculate weighted confidence
         weighted_confidence = (
@@ -1054,7 +1054,7 @@ class ModelClassifier:
         debugger.add_step("size_classification", "started")
         
         file_size = file_path.stat().st_size
-        primary_type, confidence = self.classify_by_size_only(file_size)
+        primary_type, confidence = self.classify_by_size_only(file_size, file_path.suffix)
         
         debugger.add_step("size_analysis", "completed", 
                          detected=primary_type, 
@@ -1097,12 +1097,16 @@ class ModelClassifier:
         classification_result.raw_metadata = raw_metadata
         return classification_result
     
-    def classify_by_size_only(self, file_size: int) -> Tuple[str, float]:
+    def classify_by_size_only(self, file_size: int, file_extension: str = None) -> Tuple[str, float]:
         """Get type and confidence based on file size only"""
         best_match = 'unknown'
         best_confidence = 0.3
         
         for model_type, rules in self.size_rules.items():
+            # Skip GGUF classification for non-.gguf files
+            if model_type == 'gguf' and file_extension and file_extension.lower() != '.gguf':
+                continue
+                
             min_size = rules.get('min', 0)
             max_size = rules.get('max', float('inf'))
             
