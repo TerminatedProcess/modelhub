@@ -716,43 +716,11 @@ class ModelClassifier:
         file_size = file_path.stat().st_size if file_path.exists() else 0
         debugger.set_file_analysis(file_size, file_path.suffix, file_path.name)
         
-        # Check if this is a reclassification and if we have existing metadata
-        has_existing_metadata = False
-        if model_id and self.database:
-            try:
-                existing_metadata = self.database.get_model_metadata_dict(model_id)
-                if existing_metadata:
-                    has_existing_metadata = True
-                    debugger.add_step("existing_metadata_check", "found", metadata_count=len(existing_metadata))
-                    if not quiet:
-                        print("    Found existing metadata - using efficient reclassification...")
-                else:
-                    debugger.add_step("existing_metadata_check", "missing", reason="no_metadata_found")
-                    if not quiet:
-                        print("    No existing metadata - treating as new model...")
-            except Exception as e:
-                debugger.add_step("existing_metadata_check", "error", error=str(e))
-                debugger.add_error(f"Metadata check failed: {e}")
-        else:
-            debugger.add_step("existing_metadata_check", "skipped", reason="new_model_or_no_db")
+        # Note: Removed problematic "efficient reclassification" branching logic
+        # All models now go through the same comprehensive classification process
+        # This ensures consistent results between initial scan and reclassification
         
-        # If we have existing metadata, use efficient reclassification
-        if has_existing_metadata:
-            debugger.add_step("efficient_reclassification", "started")
-            # For existing metadata, we just re-run scoring with cached data
-            # This is more efficient than re-extracting everything
-            if file_path.suffix.lower() == '.safetensors':
-                result = self.classify_safetensors(file_path, file_hash, quiet)
-                debugger.add_step("efficient_reclassification", "completed", method="safetensors_cached")
-            else:
-                result = self.classify_by_size(file_path, file_hash, quiet)
-                debugger.add_step("efficient_reclassification", "completed", method="size_cached")
-            
-            # Add debug info to result
-            result.debug_info = debugger.to_json()
-            return result
-        
-        # Full classification process for new models or missing metadata
+        # Full classification process for all models (unified approach)
         debugger.add_step("full_classification", "started")
         
         # Calculate hash if not provided
