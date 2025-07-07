@@ -82,6 +82,10 @@ def main():
         sys.exit(0)
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        print("Full traceback:")
+        traceback.print_exc()
+        print(f"\nError details also logged to /tmp/modelhub_error.log")
         sys.exit(1)
 
 if __name__ == "__main__":

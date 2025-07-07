@@ -59,64 +59,75 @@ class ModelHubTUI:
     
     def run(self, stdscr):
         """Main application loop"""
-        self.stdscr = stdscr
-        self.setup_curses()
-        self.load_initial_data()
-        
-        while True:
-            self.draw_screen()
-            key = stdscr.getch()
+        try:
+            self.stdscr = stdscr
+            self.setup_curses()
+            self.load_initial_data()
             
-            
-            if key == ord('q'):
-                break
-            elif key == curses.KEY_MOUSE:
-                self.handle_mouse()
-            elif self.active_field is not None:
-                # Handle input for active filter field - this takes priority
-                self.handle_filter_input(key)
-            elif key == curses.KEY_UP:
-                self.move_selection(-1)
-            elif key == curses.KEY_DOWN:
-                self.move_selection(1)
-            elif key == curses.KEY_LEFT:
-                self.prev_page()
-            elif key == curses.KEY_RIGHT:
-                self.next_page()
-            elif key == curses.KEY_PPAGE:  # Page Up
-                self.page_up()
-            elif key == curses.KEY_NPAGE:  # Page Down
-                self.page_down()
-            elif key == ord('d'):
-                self.show_model_details()
-            elif key == ord('F'):  # Shift+F to activate filter
-                self.activate_filter_field('model')
-            elif key == ord('r'):
-                self.reset_filters()
-            elif key == ord('n'):
-                self.filter_non_civitai()
-            elif key == ord('h'):
-                self.toggle_help()
-            elif key == ord('c'):
-                self.configure_deploy()
-            elif key == ord('D'):
-                self.show_deploy_menu()
-            elif key == ord('e'):
-                self.export_models()
-            elif key == ord('C'):
-                self.cleanup_menu()
-            elif key == ord('S'):
-                self.scan_directory()
-            elif key == ord('R'):
-                self.reclassify_models()
-            elif key == ord('X'):
-                self.delete_models()
-            elif key == ord('H'):
-                self.generate_hash_files()
-            elif key == ord('Y'):  # Shift+Y to toggle symlinks
-                self.toggle_symlinks()
-            elif key == ord('\n') or key == curses.KEY_ENTER:
-                self.show_model_options()
+            while True:
+                self.draw_screen()
+                key = stdscr.getch()
+                
+                
+                if key == ord('q'):
+                    break
+                elif key == curses.KEY_MOUSE:
+                    self.handle_mouse()
+                elif self.active_field is not None:
+                    # Handle input for active filter field - this takes priority
+                    self.handle_filter_input(key)
+                elif key == curses.KEY_UP:
+                    self.move_selection(-1)
+                elif key == curses.KEY_DOWN:
+                    self.move_selection(1)
+                elif key == curses.KEY_LEFT:
+                    self.prev_page()
+                elif key == curses.KEY_RIGHT:
+                    self.next_page()
+                elif key == curses.KEY_PPAGE:  # Page Up
+                    self.page_up()
+                elif key == curses.KEY_NPAGE:  # Page Down
+                    self.page_down()
+                elif key == ord('d'):
+                    self.show_model_details()
+                elif key == ord('F'):  # Shift+F to activate filter
+                    self.activate_filter_field('model')
+                elif key == ord('r'):
+                    self.reset_filters()
+                elif key == ord('n'):
+                    self.filter_non_civitai()
+                elif key == ord('h'):
+                    self.toggle_help()
+                elif key == ord('c'):
+                    self.configure_deploy()
+                elif key == ord('D'):
+                    self.show_deploy_menu()
+                elif key == ord('e'):
+                    self.export_models()
+                elif key == ord('C'):
+                    self.cleanup_menu()
+                elif key == ord('S'):
+                    self.scan_directory()
+                elif key == ord('R'):
+                    self.reclassify_models()
+                elif key == ord('X'):
+                    self.delete_models()
+                elif key == ord('H'):
+                    self.generate_hash_files()
+                elif key == ord('Y'):  # Shift+Y to toggle symlinks
+                    self.toggle_symlinks()
+                elif key == ord('\n') or key == curses.KEY_ENTER:
+                    self.show_model_options()
+                
+        except Exception as e:
+            # Critical error in main loop - log and re-raise to exit gracefully
+            import traceback
+            with open("/tmp/modelhub_error.log", "a") as f:
+                f.write(f"CRITICAL ERROR in TUI main loop: {e}\n")
+                f.write(traceback.format_exc())
+                f.write("\n" + "="*50 + "\n")
+            # Re-raise to exit the application
+            raise
     
     def setup_curses(self):
         """Initialize curses settings"""
@@ -633,90 +644,113 @@ class ModelHubTUI:
     # Model operations
     def show_model_options(self):
         """Show options popup for selected model"""
-        if not self.models or self.selected_row >= len(self.models):
-            self.status_message = "No model selected"
-            return
+        try:
+            if not self.models or self.selected_row >= len(self.models):
+                self.status_message = "No model selected"
+                return
+                
+            model = self.models[self.selected_row]
             
-        model = self.models[self.selected_row]
-        
-        # Create popup window
-        popup_height = 8
-        popup_width = 50
-        popup_y = self.height // 2 - popup_height // 2
-        popup_x = self.width // 2 - popup_width // 2
-        
-        popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
-        popup_win.box()
-        
-        # Show model filename in title
-        title = f" {model.filename[:44]} "
-        popup_win.addstr(0, 2, title[:popup_width-4], curses.A_BOLD)
-        
-        # Menu options - reordered with hotkeys
-        options = []
-        
-        # Add Copy Triggers as first option for LoRA models with triggers
-        if model.primary_type and 'lora' in model.primary_type.lower() and model.triggers:
-            options.append("Copy (t)riggers")
+            # Create popup window
+            popup_height = 10  # Increased to accommodate more menu options
+            popup_width = 50
+            popup_y = self.height // 2 - popup_height // 2
+            popup_x = self.width // 2 - popup_width // 2
             
-        options.extend([
-            "(l)n -s to clipboard",
-            "(r)e-classify",
-            "(v)iew metadata",
-            "(d)elete model"
-        ])
-        
-        selected_option = 0
-        
-        while True:
-            # Clear content area
-            for i in range(1, popup_height - 1):
-                popup_win.addstr(i, 1, " " * (popup_width - 2))
+            popup_win = curses.newwin(popup_height, popup_width, popup_y, popup_x)
+            popup_win.box()
             
-            # Draw options
-            for i, option in enumerate(options):
-                y = 2 + i
-                attr = curses.color_pair(2) if i == selected_option else 0
-                popup_win.addstr(y, 3, f"{option}", attr)
+            # Show model filename in title
+            title = f" {model.filename[:44]} "
+            popup_win.addstr(0, 2, title[:popup_width-4], curses.A_BOLD)
             
-            popup_win.refresh()
+            # Menu options - reordered with hotkeys
+            options = []
             
-            # Handle input
-            key = self.stdscr.getch()  # Use main screen getch instead of popup
+            # Add Copy Triggers as first option for LoRA models with triggers
+            if model.primary_type and 'lora' in model.primary_type.lower() and model.triggers:
+                options.append("Copy (t)riggers")
+                
+            options.extend([
+                "(l)n -s to clip",
+                "(m)odel file to clip",
+                "(r)ename model",
+                "(c)lassify again",
+                "(v)iew metadata",
+                "(d)elete model"
+            ])
             
-            if key == curses.KEY_UP and selected_option > 0:
-                selected_option -= 1
-            elif key == curses.KEY_DOWN and selected_option < len(options) - 1:
-                selected_option += 1
-            elif key == ord('\n') or key == curses.KEY_ENTER:
-                del popup_win
-                self.handle_model_option(model, selected_option)
-                break
-            elif key == 27 or key == ord('q'):  # Escape or 'q'
-                del popup_win
-                break
-            # Handle hotkeys
-            elif key == ord('t') or key == ord('T'):  # Copy triggers hotkey
-                if model.primary_type and 'lora' in model.primary_type.lower() and model.triggers:
+            selected_option = 0
+            
+            while True:
+                # Clear content area
+                for i in range(1, popup_height - 1):
+                    popup_win.addstr(i, 1, " " * (popup_width - 2))
+                
+                # Draw options
+                for i, option in enumerate(options):
+                    y = 2 + i
+                    attr = curses.color_pair(2) if i == selected_option else 0
+                    popup_win.addstr(y, 3, f"{option}", attr)
+                
+                popup_win.refresh()
+                
+                # Handle input
+                key = self.stdscr.getch()  # Use main screen getch instead of popup
+                
+                if key == curses.KEY_UP and selected_option > 0:
+                    selected_option -= 1
+                elif key == curses.KEY_DOWN and selected_option < len(options) - 1:
+                    selected_option += 1
+                elif key == ord('\n') or key == curses.KEY_ENTER:
                     del popup_win
-                    self.copy_model_triggers(model)
+                    self.handle_model_option(model, selected_option)
                     break
-            elif key == ord('l') or key == ord('L'):  # ln -s to clipboard hotkey
+                elif key == 27 or key == ord('q'):  # Escape or 'q'
+                    del popup_win
+                    break
+                # Handle hotkeys
+                elif key == ord('t') or key == ord('T'):  # Copy triggers hotkey
+                    if model.primary_type and 'lora' in model.primary_type.lower() and model.triggers:
+                        del popup_win
+                        self.copy_model_triggers(model)
+                        break
+                elif key == ord('l') or key == ord('L'):  # ln -s to clipboard hotkey
+                    del popup_win
+                    self.copy_symlink_command(model)
+                    break
+                elif key == ord('m') or key == ord('M'):  # Model file path to clipboard hotkey
+                    del popup_win
+                    self.copy_model_path(model)
+                    break
+                elif key == ord('r') or key == ord('R'):  # Rename model hotkey
+                    del popup_win
+                    self.rename_model(model)
+                    break
+                elif key == ord('c') or key == ord('C'):  # Re-classify hotkey
+                    del popup_win
+                    self.reclassify_single_model(model)
+                    break
+                elif key == ord('v') or key == ord('V'):  # View metadata hotkey
+                    del popup_win
+                    self.show_model_details(model)
+                    break
+                elif key == ord('d') or key == ord('D'):  # Delete hotkey
+                    del popup_win
+                    self.delete_single_model(model)
+                    break
+                
+        except Exception as e:
+            # Ensure we clean up the popup window even on error
+            if 'popup_win' in locals():
                 del popup_win
-                self.copy_symlink_command(model)
-                break
-            elif key == ord('r') or key == ord('R'):  # Re-classify hotkey
-                del popup_win
-                self.reclassify_single_model(model)
-                break
-            elif key == ord('v') or key == ord('V'):  # View metadata hotkey
-                del popup_win
-                self.show_model_details(model)
-                break
-            elif key == ord('d') or key == ord('D'):  # Delete hotkey
-                del popup_win
-                self.delete_single_model(model)
-                break
+            self.status_message = f"Error in model options: {e}"
+            import traceback
+            # Log the full traceback for debugging
+            with open("/tmp/modelhub_error.log", "a") as f:
+                f.write(f"Error in show_model_options: {e}\n")
+                f.write(traceback.format_exc())
+                f.write("\n" + "="*50 + "\n")
     
     def handle_model_option(self, model: Model, option_index: int):
         """Handle selected model option"""
@@ -725,21 +759,29 @@ class ModelHubTUI:
         
         if option_index == 0 and has_copy_triggers:  # Copy Triggers (LoRA only - first option)
             self.copy_model_triggers(model)
-        elif option_index == 0 and not has_copy_triggers:  # ln -s to clipboard (first option for non-LoRA)
+        elif option_index == 0 and not has_copy_triggers:  # ln -s to clip (first option for non-LoRA)
             self.copy_symlink_command(model)
-        elif option_index == 1 and has_copy_triggers:  # ln -s to clipboard (second option for LoRA with triggers)
+        elif option_index == 1 and has_copy_triggers:  # ln -s to clip (second option for LoRA with triggers)
             self.copy_symlink_command(model)
-        elif option_index == 1 and not has_copy_triggers:  # Re-classify (second option for non-LoRA)
+        elif option_index == 1 and not has_copy_triggers:  # Model file to clip (second option for non-LoRA)
+            self.copy_model_path(model)
+        elif option_index == 2 and has_copy_triggers:  # Model file to clip (third option for LoRA with triggers)
+            self.copy_model_path(model)
+        elif option_index == 2 and not has_copy_triggers:  # Rename model (third option for non-LoRA)
+            self.rename_model(model)
+        elif option_index == 3 and has_copy_triggers:  # Rename model (fourth option for LoRA with triggers)
+            self.rename_model(model)
+        elif option_index == 3 and not has_copy_triggers:  # Classify again (fourth option for non-LoRA)
             self.reclassify_single_model(model)
-        elif option_index == 2 and has_copy_triggers:  # Re-classify (third option for LoRA with triggers)
+        elif option_index == 4 and has_copy_triggers:  # Classify again (fifth option for LoRA with triggers)
             self.reclassify_single_model(model)
-        elif option_index == 2 and not has_copy_triggers:  # View Metadata (third option for non-LoRA)
+        elif option_index == 4 and not has_copy_triggers:  # View Metadata (fifth option for non-LoRA)
             self.show_model_details(model)
-        elif option_index == 3 and has_copy_triggers:  # View Metadata (fourth option for LoRA with triggers)
+        elif option_index == 5 and has_copy_triggers:  # View Metadata (sixth option for LoRA with triggers)
             self.show_model_details(model)
-        elif option_index == 3 and not has_copy_triggers:  # Delete (fourth option for non-LoRA)
+        elif option_index == 5 and not has_copy_triggers:  # Delete (sixth option for non-LoRA)
             self.delete_single_model(model)
-        elif option_index == 4:  # Delete (fifth option for LoRA with triggers)
+        elif option_index == 6:  # Delete (seventh option for LoRA with triggers)
             self.delete_single_model(model)
     
     def show_model_details(self, model: Model = None):
@@ -1108,6 +1150,193 @@ class ModelHubTUI:
                 
         except Exception as e:
             self.status_message = f"Symlink clipboard error: {e}"
+    
+    def copy_model_path(self, model: Model):
+        """Copy model file path and filename to clipboard"""
+        try:
+            from clipboard_utils import copy_to_clipboard
+            
+            # Get model hub path and construct full path to model file
+            model_hub_path = self.config.get_model_hub_path()
+            full_path = model_hub_path / "models" / model.file_hash / model.filename
+            
+            if copy_to_clipboard(str(full_path)):
+                self.status_message = f"Copied model path to clipboard: {model.filename}"
+            else:
+                self.status_message = f"Failed to copy model path. Install xclip/wl-clipboard"
+                
+        except Exception as e:
+            self.status_message = f"Model path clipboard error: {e}"
+    
+    def rename_model(self, model: Model):
+        """Rename a model file and update database"""
+        # Create input dialog - make it wider for long filenames
+        input_height = 8
+        input_width = min(self.width - 4, 120)  # Use most of screen width, max 120
+        input_y = self.height // 2 - input_height // 2
+        input_x = self.width // 2 - input_width // 2
+        
+        input_win = curses.newwin(input_height, input_width, input_y, input_x)
+        input_win.box()
+        
+        # Show title and current filename (truncated if too long)
+        title = " Rename Model "
+        input_win.addstr(0, 2, title, curses.A_BOLD)
+        
+        # Display current filename, truncated if needed
+        current_display = model.filename
+        max_current_width = input_width - 12  # "Current: " is 9 chars + padding
+        if len(current_display) > max_current_width:
+            current_display = "..." + current_display[-(max_current_width-3):]
+        
+        input_win.addstr(2, 2, f"Current: {current_display}")
+        input_win.addstr(4, 2, f"New name: ")
+        
+        # Pre-fill with current filename
+        current_name = model.filename
+        new_name = current_name
+        cursor_pos = len(new_name)
+        
+        curses.curs_set(1)  # Show cursor
+        
+        while True:
+            # Clear input area and redraw with background color
+            input_field_start = 12  # Position after "New name: "
+            input_field_width = input_width - 14  # Leave space for borders and label
+            
+            # Clear with background color (same as filter fields)
+            input_win.addstr(4, input_field_start, " " * input_field_width, curses.color_pair(6))
+            
+            # Show visible portion of new_name (with horizontal scrolling)
+            visible_start = max(0, cursor_pos - input_field_width + 10)
+            visible_name = new_name[visible_start:visible_start + input_field_width]
+            
+            # Display text with cursor highlighting
+            for i, char in enumerate(visible_name):
+                char_pos = input_field_start + i
+                if char_pos >= input_width - 2:  # Don't exceed window bounds
+                    break
+                    
+                # Highlight character at cursor position
+                if visible_start + i == cursor_pos:
+                    # Cursor position - use reverse video for visibility
+                    input_win.addch(4, char_pos, ord(char), curses.color_pair(6) | curses.A_REVERSE)
+                else:
+                    # Normal character
+                    input_win.addch(4, char_pos, ord(char), curses.color_pair(6))
+            
+            # If cursor is at the end of text, show it as a space with reverse video
+            visible_cursor_pos = cursor_pos - visible_start
+            if visible_cursor_pos >= len(visible_name) and visible_cursor_pos < input_field_width:
+                cursor_x = input_field_start + visible_cursor_pos
+                if cursor_x < input_width - 2:
+                    input_win.addch(4, cursor_x, ord(' '), curses.color_pair(6) | curses.A_REVERSE)
+            
+            # Position cursor for terminal cursor visibility too
+            cursor_x = min(input_field_start + visible_cursor_pos, input_width - 2)
+            input_win.move(4, cursor_x)
+            
+            # Show instructions
+            input_win.addstr(6, 2, "Enter to confirm, Escape to cancel")
+            
+            input_win.refresh()
+            
+            # Use input_win.getch() instead of self.stdscr.getch() for proper focus
+            key = input_win.getch()
+            
+            if key == 27:  # Escape - cancel
+                break
+            elif key == ord('\n') or key == curses.KEY_ENTER or key == 10:  # Enter - confirm
+                if new_name.strip() and new_name != current_name:
+                    curses.curs_set(0)  # Hide cursor
+                    del input_win
+                    self.perform_rename(model, new_name.strip())
+                    return
+                elif new_name == current_name:
+                    self.status_message = "Rename cancelled - no changes made"
+                    break
+                else:
+                    # Show error for empty name
+                    input_win.addstr(7, 2, "Error: Filename cannot be empty!", curses.color_pair(5))
+                    input_win.refresh()
+                    continue
+            elif key == curses.KEY_BACKSPACE or key == 127 or key == 8:  # Backspace
+                if cursor_pos > 0:
+                    new_name = new_name[:cursor_pos-1] + new_name[cursor_pos:]
+                    cursor_pos -= 1
+            elif key == curses.KEY_LEFT:  # Left arrow
+                if cursor_pos > 0:
+                    cursor_pos -= 1
+            elif key == curses.KEY_RIGHT:  # Right arrow
+                if cursor_pos < len(new_name):
+                    cursor_pos += 1
+            elif key == curses.KEY_HOME:  # Home
+                cursor_pos = 0
+            elif key == curses.KEY_END:  # End
+                cursor_pos = len(new_name)
+            elif key == ord('\t'):  # Tab - ignore
+                pass
+            elif 32 <= key <= 126:  # Printable characters
+                char = chr(key)
+                new_name = new_name[:cursor_pos] + char + new_name[cursor_pos:]
+                cursor_pos += 1
+            # Ignore all other keys to prevent global key activation
+            else:
+                pass
+        
+        curses.curs_set(0)  # Hide cursor
+        del input_win
+        
+    def perform_rename(self, model: Model, new_filename: str):
+        """Actually perform the rename operation"""
+        try:
+            import os
+            from pathlib import Path
+            
+            # Get model hub path
+            model_hub_path = self.config.get_model_hub_path()
+            
+            # Construct current and new file paths
+            model_dir = model_hub_path / "models" / model.file_hash
+            current_path = model_dir / model.filename
+            new_path = model_dir / new_filename
+            
+            # Check if current file exists
+            if not current_path.exists():
+                self.status_message = f"Error: Current file not found: {current_path}"
+                return
+            
+            # Check if new filename already exists
+            if new_path.exists():
+                self.status_message = f"Error: File already exists: {new_filename}"
+                return
+            
+            # Validate filename (basic checks)
+            if '/' in new_filename or '\\' in new_filename:
+                self.status_message = "Error: Filename cannot contain path separators"
+                return
+            
+            # Perform the rename operation
+            os.rename(current_path, new_path)
+            
+            # Update database with new filename
+            with self.db.conn:
+                self.db.conn.execute(
+                    "UPDATE models SET filename = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (new_filename, model.id)
+                )
+            
+            # Reload models to show updated data
+            self.load_models()
+            
+            self.status_message = f"Renamed: {model.filename} -> {new_filename}"
+            
+        except PermissionError:
+            self.status_message = f"Error: Permission denied renaming {model.filename}"
+        except OSError as e:
+            self.status_message = f"Error renaming {model.filename}: {e}"
+        except Exception as e:
+            self.status_message = f"Unexpected error renaming {model.filename}: {e}"
     
     def show_deploy_menu(self):
         """Show deployment options menu"""
