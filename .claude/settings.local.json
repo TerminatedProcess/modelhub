@@ -8,7 +8,9 @@
       "Bash(python3:*)",
       "Bash(ls:*)",
       "Bash(awk:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "WebFetch(domain:www.runcomfy.com)",
+      "WebFetch(domain:docs.comfy.org)"
     ],
     "deny": []
   }

@@ -2116,9 +2116,8 @@ class ModelHubTUI:
         # TODO: Implement model deployment
     
     def export_models(self):
-        """Export symlink commands (STUB)"""
-        self.status_message = "Export symlinks functionality - STUB"
-        # TODO: Implement symlink export
+        """Export symlink commands to clipboard"""
+        self.generate_symlinks_for_current_models()
     
     def generate_hash_files(self):
         """Generate hash files for all models in the database"""
