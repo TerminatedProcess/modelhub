@@ -1268,7 +1268,7 @@ class ModelHubDB:
         # Skip LFS pointer files entirely - they're not actual models
         from classifier import SafeTensorsExtractor
         if SafeTensorsExtractor.is_lfs_pointer_file(file_path):
-            if not quiet:
+            if False: # not quiet:
                 print(f"Skipping LFS pointer file (not downloaded): {file_path.name}")
             return None
         

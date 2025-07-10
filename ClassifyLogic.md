@@ -388,3 +388,192 @@ The classification process is comprehensive, using multiple analysis methods wit
 4. **External APIs**: `classifier.py:224-353` - `lookup_civitai_model()` method
 
 The classification system provides comprehensive model type detection with high accuracy through multiple analysis layers and external data sources.
+
+## AI Enhancement Proposal (Future Development)
+
+### **Current System Limitations**
+
+The existing classification system, while comprehensive, has several limitations that AI enhancement could address:
+
+1. **Static Rule-Based Logic**: Hard-coded patterns become outdated as new model types emerge
+2. **Deployment Mapping Issues**: Static mappings (e.g., GGUF → checkpoints) don't reflect current platform requirements
+3. **Limited Context Understanding**: Cannot understand model purpose from descriptions or metadata context
+4. **Manual Correction Cycle**: Requires constant human intervention for misclassifications
+5. **Platform Evolution Lag**: Cannot adapt to ComfyUI directory structure changes automatically
+6. **No Learning Capability**: System doesn't improve from user corrections or deployment success data
+
+### **AI-Enhanced Classification Architecture**
+
+#### **Phase 1: AI-Powered Classification Agent**
+
+**Architecture Flow:**
+```
+Current: File → Static Rules → Database
+Enhanced: File → AI Agent → Learning System → Database
+```
+
+**AI Agent Components:**
+1. **Context Analyzer**: Analyzes filename, metadata, tensor patterns, file size with natural language understanding
+2. **Deployment Mapper**: Determines correct target directories based on current platform documentation
+3. **Confidence Evaluator**: Assesses classification reliability using multiple validation methods
+4. **Learning Module**: Stores successful classifications and user corrections for future reference
+
+**Recommended AI Stack:**
+- **Primary**: **Gemini Pro** (best text classification performance, cost-effective at ~$0.50/1M tokens)
+- **Fallback**: **Claude API** (excellent context understanding, $3.00/1M tokens)
+- **Local Option**: **OpenAI API** (reliable, well-documented, $1.00/1M tokens)
+
+#### **Phase 2: Adaptive Deployment Mapping**
+
+**Current Problem**: Static mappings like `gguf → checkpoints` are incorrect for modern ComfyUI
+
+**AI Solution**: Dynamic mapping based on:
+- Real-time analysis of model characteristics
+- Current platform documentation parsing
+- Historical deployment success data
+- Community usage patterns
+
+**Implementation Concept:**
+```python
+class AIDeploymentMapper:
+    def determine_deployment_path(self, model_info, target_platform):
+        # AI analyzes model characteristics and current platform docs
+        # Returns optimal deployment directory with confidence score
+        
+        context = {
+            'model_type': model_info.primary_type,
+            'sub_type': model_info.sub_type,
+            'tensor_patterns': model_info.tensor_analysis,
+            'filename': model_info.filename,
+            'metadata': model_info.metadata,
+            'platform': target_platform,
+            'platform_version': self.get_platform_version(target_platform)
+        }
+        
+        return self.ai_agent.classify_deployment(context)
+```
+
+**Enhanced Deployment Logic:**
+```python
+# Current: All GGUF → checkpoints
+# Enhanced: AI determines optimal path based on model analysis
+flux_dev_gguf → models/unet/          # Diffusion models
+clip_gguf → models/clip/               # Text encoders
+vae_gguf → models/vae/                 # VAE models
+t5_gguf → models/text_encoders/        # Text encoders (newer structure)
+```
+
+#### **Phase 3: Self-Learning System**
+
+**Learning Sources:**
+1. **User Corrections**: When users manually fix classifications, system learns the pattern
+2. **CivitAI Validation**: Compare AI predictions with authoritative CivitAI data
+3. **Deployment Success**: Track which deployments work in practice
+4. **Community Feedback**: Learn from classification patterns across user base
+
+**Learning Implementation:**
+```python
+class ClassificationLearningSystem:
+    def record_correction(self, original_classification, corrected_classification, model_info):
+        # Store correction patterns for future reference
+        
+    def validate_against_civitai(self, ai_classification, civitai_data):
+        # Compare and learn from authoritative source
+        
+    def track_deployment_success(self, deployment_path, success_rate):
+        # Learn from real-world deployment outcomes
+```
+
+### **Implementation Strategy**
+
+#### **Phase 1: AI Integration (Months 1-2)**
+1. **AI Service Integration**: Add Gemini Pro API support to classification pipeline
+2. **Prompt Engineering**: Develop specialized prompts for model classification
+3. **Fallback Integration**: Maintain current system as fallback for AI failures
+4. **Testing Framework**: Comprehensive testing against current classification results
+
+#### **Phase 2: Deployment Intelligence (Months 3-4)**
+1. **Platform Documentation Parser**: AI agent that reads current ComfyUI docs
+2. **Dynamic Mapping System**: Replace static deployment mappings with AI-driven decisions
+3. **Validation Loop**: Automated testing of deployment paths
+4. **User Feedback Integration**: Allow users to report successful/failed deployments
+
+#### **Phase 3: Learning System (Months 5-6)**
+1. **Correction Tracking**: System learns from user manual corrections
+2. **Pattern Recognition**: Identify common misclassification patterns
+3. **Continuous Improvement**: Regular retraining based on accumulated data
+4. **Community Learning**: Share successful classification patterns (privacy-preserving)
+
+### **Expected Benefits**
+
+1. **Accuracy Improvement**: AI context understanding should significantly reduce misclassifications
+2. **Deployment Reliability**: Dynamic mapping ensures models deploy to correct directories
+3. **Platform Adaptability**: System adapts automatically to ComfyUI changes
+4. **Reduced Manual Intervention**: Self-learning reduces need for constant corrections
+5. **Future-Proof**: AI can adapt to new model types and platforms as they emerge
+
+### **Technical Considerations**
+
+1. **API Costs**: Estimated $50-100/month for moderate usage (1000 classifications)
+2. **Response Time**: AI calls may add 1-3 seconds to classification process
+3. **Offline Mode**: Maintain current system for offline operation
+4. **Privacy**: Ensure model metadata doesn't leak sensitive information to AI services
+5. **Rate Limiting**: Implement proper rate limiting and error handling for AI API calls
+
+### **Configuration Integration**
+
+Extend existing configuration system to support AI enhancement:
+
+```yaml
+# config.yaml additions
+ai_classification:
+  enabled: true
+  primary_provider: "gemini"
+  fallback_provider: "claude"
+  api_keys:
+    gemini: "GEMINI_API_KEY"
+    claude: "CLAUDE_API_KEY"
+    openai: "OPENAI_API_KEY"
+  confidence_threshold: 0.7
+  learning_enabled: true
+  deployment_intelligence: true
+```
+
+### **Database Schema Extensions**
+
+Add AI-specific tables to support learning and tracking:
+
+```sql
+-- AI classification results
+CREATE TABLE ai_classifications (
+    id INTEGER PRIMARY KEY,
+    model_id INTEGER,
+    provider TEXT,
+    classification_result TEXT,
+    confidence REAL,
+    response_time REAL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Learning data from corrections
+CREATE TABLE classification_corrections (
+    id INTEGER PRIMARY KEY,
+    model_id INTEGER,
+    original_classification TEXT,
+    corrected_classification TEXT,
+    correction_source TEXT, -- 'user', 'civitai', 'deployment_test'
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Deployment success tracking
+CREATE TABLE deployment_feedback (
+    id INTEGER PRIMARY KEY,
+    model_id INTEGER,
+    deployment_path TEXT,
+    success BOOLEAN,
+    feedback_source TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+This AI enhancement proposal provides a roadmap for transforming ModelHub from a static rule-based system to an intelligent, adaptive classification platform that learns and improves over time.
