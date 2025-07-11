@@ -26,12 +26,13 @@ ModelHub is a comprehensive AI model classification and deployment system that a
 - **Development Database**: `./modelhub.db` in project root (empty, for development)
 
 ### Classification System
-Multi-layer classification with weighted scoring:
-1. **Filename Analysis** - Pattern matching on filenames
-2. **Size Analysis** - File size-based type detection  
-3. **Metadata Extraction** - SafeTensors/GGUF metadata parsing
-4. **Tensor Analysis** - Deep model architecture inspection
-5. **External APIs** - CivitAI and other service integration
+Multi-step classification pipeline:
+1. **GGUF Extension Check** - Direct classification for .gguf files
+2. **LFS Pointer Detection** - Check for undownloaded Git LFS files
+3. **CivitAI API Lookup** - Community-validated classification (highest priority)
+4. **SafeTensors Analysis** - Database-driven tensor pattern matching
+5. **Size-based Fallback** - File size classification for unsupported formats
+6. **Final Decision Logic** - Compare CivitAI vs local analysis results
 
 ## Common Commands
 

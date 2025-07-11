@@ -223,62 +223,50 @@ class GGUFExtractor:
 class TensorAnalyzer:
     """Analyze tensor structures to determine model architecture"""
     
-    def __init__(self):
-        # Define tensor patterns for different model types
-        self.tensor_patterns = {
-            'lora': [
-                r'.*\.lora_up\..*',
-                r'.*\.lora_down\..*', 
-                r'.*\.alpha$',
-                r'.*lora_A\..*',
-                r'.*lora_B\..*',
-                r'.*\.hada_w1_.*',
-                r'.*\.hada_w2_.*',
-                r'.*\.lora_.*\.weight$',
-                r'.*\.lora_.*\.bias$',
-                r'.*lora_down$',
-                r'.*lora_up$',
-                r'.*\.locon_.*',
-                r'.*\.lokr_.*'
-            ],
-            'flux': [
-                'double_blocks',
-                'single_blocks', 
-                'img_attn',
-                'txt_attn',
-                'guidance_in'
-            ],
-            'controlnet': [
-                'control_model',
-                'input_blocks',
-                'middle_block',
-                'output_blocks',
-                'zero_convs'
-            ],
-            'vae': [
-                'encoder.down',
-                'decoder.up',
-                'quant_conv',
-                'post_quant_conv'
-            ],
-            'video_vae': [
-                r'encoder\.downsamples\..*\.residual\..*',
-                r'decoder\.upsamples\..*\.residual\..*',
-                'temporal_down',
-                'temporal_up'
-            ],
-            'clip': [
-                'text_model.encoder',
-                'text_projection',
-                'visual.transformer'
-            ],
-            'unet': [
-                'time_embed',
-                'input_blocks',
-                'middle_block', 
-                'output_blocks'
-            ]
-        }
+    def __init__(self, database=None):
+        self.database = database
+        self.tensor_patterns = {}
+        self.load_patterns_from_database()
+    
+    def load_patterns_from_database(self):
+        """Load tensor patterns from classification database"""
+        if not self.database:
+            # Fallback to hard-coded patterns if no database
+            self.tensor_patterns = {
+                'lora': [r'.*\.lora_up\..*', r'.*\.lora_down\..*', r'.*\.alpha$'],
+                'vae': ['encoder.down', 'decoder.up', 'quant_conv', 'post_quant_conv'],
+                'unet': ['time_embed', 'input_blocks', 'middle_block', 'output_blocks']
+            }
+            return
+            
+        try:
+            with self.database.class_conn:
+                cursor = self.database.class_conn.execute('''
+                    SELECT architecture, tensor_pattern, confidence_weight 
+                    FROM architecture_patterns 
+                    WHERE enabled = 1
+                    ORDER BY architecture, confidence_weight DESC
+                ''')
+                
+                for row in cursor.fetchall():
+                    architecture = row[0]
+                    pattern = row[1]
+                    
+                    if architecture not in self.tensor_patterns:
+                        self.tensor_patterns[architecture] = []
+                    
+                    # Split pattern by | and add each as separate pattern
+                    patterns = pattern.split('|')
+                    self.tensor_patterns[architecture].extend(patterns)
+                    
+        except Exception as e:
+            print(f"Warning: Could not load patterns from database: {e}")
+            # Fallback to basic patterns
+            self.tensor_patterns = {
+                'lora': [r'.*\.lora_up\..*', r'.*\.lora_down\..*', r'.*\.alpha$'],
+                'vae': ['encoder.down', 'decoder.up', 'quant_conv', 'post_quant_conv'],
+                'unet': ['time_embed', 'input_blocks', 'middle_block', 'output_blocks']
+            }
     
     def analyze_tensors(self, tensor_names: List[str]) -> Dict[str, float]:
         """Analyze tensor names against known patterns"""
@@ -649,7 +637,7 @@ class ModelClassifier:
         # Initialize components
         enable_api = self.class_config.get('enable_external_apis', True)
         self.civitai = CivitAILookup(enable_api=enable_api)
-        self.tensor_analyzer = TensorAnalyzer()
+        self.tensor_analyzer = TensorAnalyzer(self.database)
         
         # Initialize data-driven classification engine
         if self.database:
@@ -767,37 +755,7 @@ class ModelClassifier:
         else:
             debugger.add_step("gguf_check", "passed", result="not_gguf")
         
-        # STEP 3: Manual Overrides (stubbed for now)
-        debugger.add_step("manual_override", "started")
-        # TODO: Implement full manual override system
-        # For now, just check basic config overrides
-        manual_overrides = self.class_config.get('manual_overrides', {})
-        filename_key = file_path.name.lower()
-        if filename_key in manual_overrides:
-            override = manual_overrides[filename_key]
-            debugger.add_step("manual_override", "applied", override_type=override.get('primary_type', 'unknown'))
-            result = ClassificationResult(
-                primary_type=override.get('primary_type', 'unknown'),
-                sub_type=override.get('sub_type', 'unknown'),
-                confidence=1.0,
-                method="manual_override",
-                triggers=override.get('triggers', []),
-                debug_info=debugger.to_json()
-            )
-            return result
-        else:
-            debugger.add_step("manual_override", "skipped", reason="no_override_found")
-        
-        # STEP 4: Data-driven Classification Engine (temporarily disabled for debugging)
-        debugger.add_step("data_driven_classification", "started")
-        if self.data_driven_engine:
-            debugger.add_step("data_driven_classification", "skipped", reason="temporarily_disabled_for_debugging")
-            if not quiet:
-                print("    Data-driven classification engine temporarily disabled for debugging...")
-        else:
-            debugger.add_step("data_driven_classification", "skipped", reason="no_engine")
-        
-        # STEP 5: CivitAI API Lookup (store result for later comparison)
+        # STEP 3: CivitAI API Lookup (store result for later comparison)
         debugger.add_step("civitai_api_lookup", "started")
         if not quiet:
             print("    Querying CivitAI API...")
@@ -818,8 +776,11 @@ class ModelClassifier:
             if not quiet:
                 print(f"    CivitAI: {civitai_result.get('name', 'Unknown')} ({primary_type})")
             
-            # Store CivitAI result for later comparison
-            civitai_classification = ClassificationResult(
+            # Use CivitAI result immediately - no need for local analysis
+            debugger.add_step("classification_choice", "civitai_used", 
+                            reason="civitai_found_valid_response")
+            
+            final_result = ClassificationResult(
                 primary_type=primary_type,
                 sub_type=sub_type,
                 confidence=civitai_result['confidence'],
@@ -827,14 +788,16 @@ class ModelClassifier:
                 base_model=base_model,
                 triggers=civitai_result.get('triggers', [])
             )
-            civitai_classification.raw_metadata = {
+            final_result.raw_metadata = {
                 'civitai_response': civitai_result,
                 'civitai_raw_data': civitai_result.get('raw_response', {})
             }
+            final_result.debug_info = debugger.to_json()
+            return final_result
         else:
             debugger.add_step("civitai_api_lookup", "not_found")
         
-        # STEP 6: SafeTensors Analysis
+        # STEP 4: SafeTensors Analysis
         debugger.add_step("safetensors_analysis", "started")
         local_result = None
         
@@ -853,14 +816,14 @@ class ModelClassifier:
                             method=local_result.method)
         else:
             debugger.add_step("safetensors_analysis", "skipped", reason="not_safetensors")
-            # STEP 7: Size-based Fallback
+            # STEP 5: Size-based Fallback
             debugger.add_step("size_fallback", "started")
             local_result = self.classify_by_size(file_path, file_hash, quiet)
             debugger.add_step("size_fallback", "completed", 
                             primary_type=local_result.primary_type,
                             method=local_result.method)
         
-        # STEP 8: Compare CivitAI vs Local Classification
+        # STEP 6: Compare CivitAI vs Local Classification
         final_result = self.choose_best_classification(civitai_classification, local_result, debugger)
         final_result.debug_info = debugger.to_json()
         return final_result

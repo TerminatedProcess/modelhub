@@ -1671,14 +1671,11 @@ class ModelHubTUI:
             print(f"Found {len(all_models)} models to reclassify")
             print("-" * 60)
             
-            # Load classifier with APIs disabled for speed during bulk reclassification
+            # Load classifier with full configuration for consistent classification
             from classifier import ModelClassifier
             raw_config = self.config.get_raw_config()
-            # Temporarily disable external APIs for faster reclassification
-            fast_config = raw_config.copy()
-            fast_config['classification'] = fast_config.get('classification', {}).copy()
-            fast_config['classification']['enable_external_apis'] = False
-            classifier = ModelClassifier(fast_config, database=self.db)
+            # Use full config including external APIs for consistent classification
+            classifier = ModelClassifier(raw_config, database=self.db)
             
             # Get model hub path to find the actual files
             model_hub_path = self.config.get_model_hub_path()
