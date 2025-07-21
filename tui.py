@@ -1141,7 +1141,7 @@ class ModelHubTUI:
             full_path = model_hub_path / "models" / model.file_hash / model.filename
             
             # Generate ln -s command
-            symlink_command = f"ln -s {full_path} ."
+            symlink_command = f"ln -s '{full_path}' ."
             
             if copy_to_clipboard(symlink_command):
                 self.status_message = f"Copied symlink command to clipboard: {model.filename}"
@@ -1449,7 +1449,7 @@ class ModelHubTUI:
             symlink_commands = []
             for model in self.models:
                 full_path = model_hub_path / "models" / model.file_hash / model.filename
-                symlink_commands.append(f"ln -s {full_path} .")
+                symlink_commands.append(f"ln -s '{full_path}' .")
             
             # Join all commands with newlines
             commands_text = "\n".join(symlink_commands)
